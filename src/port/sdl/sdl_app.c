@@ -134,6 +134,18 @@ int SDLApp_Init() {
         return 1;
     }
 
+        // Force VSync for deterministic CRT timing (Parity Lab)
+    SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
+    SDL_SetRenderVSync(renderer, 1);
+
+    // Optional: log what we actually got (0=off, 1=on, -1=adaptive depending on backend)
+    int vs = 0;
+    if (SDL_GetRenderVSync(renderer, &vs)) {
+        SDL_Log("SDL renderer vsync = %d", vs);
+    } else {
+        SDL_Log("SDL_GetRenderVSync failed: %s", SDL_GetError());
+    }
+
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
     // Initialize rendering subsystems
@@ -339,72 +351,47 @@ static void save_texture(SDL_Texture* texture, const char* filename) {
     SDL_DestroySurface(rendered_surface);
 }
 
-void SDLApp_EndFrame() {
-    // Run sound processing
-    ADX_ProcessTracks();
-
-    // Render
-
-    // This should come before SDLGameRenderer_RenderFrame,
-    // because NetstatsRenderer uses the existing SFIII rendering pipeline
-    NetstatsRenderer_Render();
-    SDLGameRenderer_RenderFrame();
-
-    if (should_save_screenshot) {
-        save_texture(cps3_canvas, "screenshot_cps3.bmp");
-    }
-
-    SDL_SetRenderTarget(renderer, screen_texture);
-
-    // Render window background
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); // black bars
-    SDL_RenderClear(renderer);
-
-    // Render content
-    const SDL_FRect dst_rect = get_letterbox_rect(screen_texture->w, screen_texture->h);
-    SDL_RenderTexture(renderer, cps3_canvas, NULL, &dst_rect);
-    SDL_RenderTexture(renderer, message_canvas, NULL, &dst_rect);
-
-    // Render screen texture to screen
-    SDL_SetRenderTarget(renderer, NULL);
-    SDL_RenderTexture(renderer, screen_texture, NULL, NULL);
-
-    if (should_save_screenshot) {
-        save_texture(screen_texture, "screenshot_screen.bmp");
-    }
-
-#if defined(DEBUG)
-    // Render debug text
-    SDLDebugText_Render();
-
-    // Render metrics
-    // int window_width;
-    // SDL_GetRenderOutputSize(renderer, &window_width, NULL);
-    // SDL_SetRenderDrawColor(renderer, 255, 255, 255, SDL_ALPHA_OPAQUE);
-    // SDL_SetRenderScale(renderer, 2, 2);
-    // SDL_RenderDebugTextFormat(renderer, (window_width / 2) - 88, 2, "FPS: %.3f", fps);
-    // SDL_SetRenderScale(renderer, 1, 1);
-#endif
-
     SDL_RenderPresent(renderer);
 
     // Cleanup
     SDLGameRenderer_EndFrame();
     should_save_screenshot = false;
 
-    // Handle cursor hiding
     hide_cursor_if_needed();
 
-    // Do frame pacing
-    Uint64 now = SDL_GetTicksNS();
+    // Only use software frame pacing if VSync is NOT active.
+    // If VSync is active, RenderPresent is the clock and extra sleeping can shift input phase.
+    int vs = 0;
+    bool have_vsync_state = SDL_GetRenderVSync(renderer, &vs);
 
-    if (frame_deadline == 0) {
-        frame_deadline = now + target_frame_time_ns;
+    if (!have_vsync_state || vs == 0) {
+        Uint64 now = SDL_GetTicksNS();
+
+        if (frame_deadline == 0) {
+            frame_deadline = now + target_frame_time_ns;
+        }
+
+        if (now < frame_deadline) {
+            Uint64 sleep_time = frame_deadline - now;
+            SDL_DelayNS(sleep_time);
+            now = SDL_GetTicksNS();
+        }
+
+        frame_deadline += target_frame_time_ns;
+
+        // If we fell behind by more than one frame, resync to avoid spiraling
+        if (now > frame_deadline + target_frame_time_ns) {
+            frame_deadline = now + target_frame_time_ns;
+        }
+    } else {
+        // When VSync is active, keep deadline reset so switching modes doesn't jump.
+        frame_deadline = 0;
     }
 
-    if (now < frame_deadline) {
-        Uint64 sleep_time = frame_deadline - now;
-        SDL_DelayNS(sleep_time);
+    // Measure
+    frame_counter += 1;
+    note_frame_end_time();
+    update_fps();
         now = SDL_GetTicksNS();
     }
 
