@@ -145,12 +145,12 @@ int main(int argc, char* argv[]) {
     }
 
     while (is_running) {
-        is_running = SDLApp_PollEvents();
-        SDLApp_BeginFrame();
-        step_0();
-        SDLApp_EndFrame();
-        step_1();
-    }
+    SDLApp_BeginFrame();
+    step_0();
+    SDLApp_EndFrame();              // Present blocks here (vblank boundary)
+    is_running = SDLApp_PollEvents(); // Pump input right after vblank
+    step_1();
+}
 
     AFS_Finish();
     SDLApp_Quit();
