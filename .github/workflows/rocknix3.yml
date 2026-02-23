@@ -1,0 +1,201 @@
+name: Build (Linux ARM64 RockNIX Sysroot)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (Linux ARM64 using RockNIX sysroot)
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:25.04
+
+    env:
+      SYSROOT_URL: "https://github.com/3sx-testing/3sx-arm64/releases/download/rocknix-sysroot-20250517/rocknix-sysroot.tgz"
+      SYSROOT_DIR: "${{ github.workspace }}/sysroot"
+      # RockNIX ports usually use a bin/ + lib/ layout
+      DIST_DIR: "${{ github.workspace }}/dist"
+
+    steps:
+      - name: Install build tools + cross-compiler
+        run: |
+          set -eux
+          apt-get update
+          apt-get install -y --no-install-recommends             ca-certificates git curl xz-utils tar             crossbuild-essential-arm64             cmake ninja-build make pkg-config             clang zip file             binutils-aarch64-linux-gnu             patchelf
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Cache RockNIX sysroot
+        uses: actions/cache@v4
+        with:
+          path: sysroot
+          key: rocknix-sysroot-${{ env.SYSROOT_URL }}
+
+      - name: Download + extract RockNIX sysroot
+        run: |
+          set -eux
+          if [ ! -d "${SYSROOT_DIR}/usr" ]; then
+            mkdir -p "${SYSROOT_DIR}"
+            curl -L "${SYSROOT_URL}" -o rocknix-sysroot.tgz
+            tar -xzf rocknix-sysroot.tgz -C "${SYSROOT_DIR}"
+          fi
+          # quick peek (helps debugging)
+          ls -la "${SYSROOT_DIR}"
+          ls -la "${SYSROOT_DIR}/usr" || true
+
+      - name: Cache third_party builds
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: linux-arm64-rocknix-deps-${{ hashFiles('build-deps.sh') }}-${{ env.SYSROOT_URL }}
+
+      - name: Build FFmpeg (aarch64 cross-compile, sysrooted)
+        run: |
+          set -eux
+          mkdir -p "${GITHUB_WORKSPACE}/third_party" && cd "${GITHUB_WORKSPACE}/third_party"
+          mkdir -p ffmpeg && cd ffmpeg
+
+          if [ ! -d "build" ]; then
+            FFMPEG="ffmpeg-8.0"
+            if [ ! -d "$FFMPEG" ]; then
+              curl -L -O "https://ffmpeg.org/releases/$FFMPEG.tar.xz"
+              tar xf "$FFMPEG.tar.xz"
+            fi
+
+            cd "$FFMPEG"
+            mkdir -p build && cd build
+
+            ../configure               --prefix="$(pwd)/../../build"               --sysroot="${SYSROOT_DIR}"               --arch=aarch64               --target-os=linux               --enable-cross-compile               --cross-prefix=aarch64-linux-gnu-               --disable-x86asm               --disable-all --disable-autodetect               --disable-static --enable-shared               --enable-avcodec --enable-avformat --enable-avutil --enable-swresample               --enable-decoder=adpcm_adx --enable-parser=adx --enable-muxer=adx               --enable-pic               --extra-cflags="--sysroot=${SYSROOT_DIR} -fPIC"               --extra-ldflags="--sysroot=${SYSROOT_DIR} -Wl,-rpath,\$ORIGIN/../lib"
+
+            make -j"$(nproc)"
+            make install
+          fi
+
+      - name: Build SDL3 (aarch64 cross-compile, sysrooted)
+        run: |
+          set -eux
+          mkdir -p "${GITHUB_WORKSPACE}/third_party" && cd "${GITHUB_WORKSPACE}/third_party"
+          mkdir -p sdl3 && cd sdl3
+
+          if [ ! -d "build" ]; then
+            SDL="SDL3-3.2.24"
+            if [ ! -d "$SDL" ]; then
+              curl -L -O "https://libsdl.org/release/$SDL.tar.gz"
+              tar xf "$SDL.tar.gz"
+            fi
+
+            cd "$SDL"
+            mkdir -p build && cd build
+
+            # Point pkg-config at sysroot .pc files (Wayland/EGL/udev/xkbcommon etc.)
+            export PKG_CONFIG_SYSROOT_DIR="${SYSROOT_DIR}"
+            export PKG_CONFIG_LIBDIR="${SYSROOT_DIR}/usr/lib/pkgconfig:${SYSROOT_DIR}/usr/share/pkgconfig:${SYSROOT_DIR}/usr/lib/aarch64-linux-gnu/pkgconfig:${SYSROOT_DIR}/usr/lib64/pkgconfig"
+
+            cmake ..               -G Ninja               -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/cmake/aarch64-linux-gnu.cmake"               -DCMAKE_SYSROOT="${SYSROOT_DIR}"               -DCMAKE_FIND_ROOT_PATH="${SYSROOT_DIR}"               -DCMAKE_INSTALL_PREFIX="$(pwd)/../../build"               -DBUILD_SHARED_LIBS=ON               -DSDL_STATIC=OFF
+
+            cmake --build . -j"$(nproc)"
+            cmake --install .
+          fi
+
+      - name: Build 3sx (Linux ARM64, sysrooted)
+        run: |
+          set -euxo pipefail
+
+          cmake -B build-linux-arm64             -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-linux-gnu.cmake             -DCMAKE_SYSROOT="${SYSROOT_DIR}"             -DCMAKE_FIND_ROOT_PATH="${SYSROOT_DIR}"             -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/third_party/build"             -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath,\$ORIGIN/../lib"
+
+          cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
+
+      - name: Report missing runtime libs (checks ALL at once)
+        if: always()
+        run: |
+          set -eux
+          BIN="build-linux-arm64/3sx"
+          OUTDIR="${GITHUB_WORKSPACE}/abi_report"
+          mkdir -p "$OUTDIR"
+
+          file "$BIN" | tee "$OUTDIR/file.txt"
+
+          # List NEEDED entries
+          aarch64-linux-gnu-readelf -d "$BIN" | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p' | sort -u | tee "$OUTDIR/needed.txt"
+
+          # Try to resolve each NEEDED inside sysroot (common RockNIX layout)
+          python3 - <<'PY'
+          import os, pathlib
+          sysroot = os.environ["SYSROOT_DIR"]
+          rep = pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "abi_report"
+          names = [l.strip() for l in (rep / "needed.txt").read_text().splitlines() if l.strip()]
+
+          search_dirs = [
+              f"{sysroot}/lib",
+              f"{sysroot}/usr/lib",
+              f"{sysroot}/usr/lib/aarch64-linux-gnu",
+              f"{sysroot}/usr/lib64",
+          ]
+
+          missing = []
+          found = {}
+
+          for n in names:
+              hit = None
+              for d in search_dirs:
+                  p = pathlib.Path(d) / n
+                  if p.exists():
+                      hit = str(p)
+                      break
+              if hit:
+                  found[n] = hit
+              else:
+                  missing.append(n)
+
+          (rep / "found.txt").write_text("\n".join(f"{k} -> {v}" for k, v in sorted(found.items())) + "\n")
+          (rep / "missing.txt").write_text("\n".join(missing) + ("\n" if missing else ""))
+
+          print("Resolved:", len(found), "Missing:", len(missing))
+          PY
+
+          echo "---- Missing (if any) ----"
+          cat "$OUTDIR/missing.txt" || true
+
+      - name: Package RockNIX-style layout (bin/ + lib/)
+        run: |
+          set -eux
+          mkdir -p "${DIST_DIR}/bin" "${DIST_DIR}/lib"
+          cp -v build-linux-arm64/3sx "${DIST_DIR}/bin/"
+
+          # Bundle only project-built shared libs (NOT glibc / system libs)
+          if [ -d "${GITHUB_WORKSPACE}/third_party/build/lib" ]; then
+            cp -av "${GITHUB_WORKSPACE}/third_party/build/lib/"*.so* "${DIST_DIR}/lib/" || true
+          fi
+
+          # Ensure binary looks for ./lib at runtime
+          patchelf --set-rpath '$ORIGIN/../lib' "${DIST_DIR}/bin/3sx" || true
+
+          (cd "${DIST_DIR}" && tar -czf "${GITHUB_WORKSPACE}/3sx-rocknix-rk3566-arm64.tar.gz" .)
+
+      - name: Upload build artifact (RockNIX)
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3sx-rocknix-rk3566-arm64
+          path: 3sx-rocknix-rk3566-arm64.tar.gz
+
+      - name: Upload ABI report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: abi-report
+          path: abi_report
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
