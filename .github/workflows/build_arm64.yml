@@ -55,7 +55,6 @@ jobs:
         run: |
           apt-get update
           apt-get install -y \
-            libcdio-dev:arm64 libcdio-cdda-dev:arm64 libcdio-paranoia-dev:arm64 \
             libasound2-dev:arm64 libpulse-dev:arm64 \
             libx11-dev:arm64 libxext-dev:arm64 libxrandr-dev:arm64 \
             libxcursor-dev:arm64 libxfixes-dev:arm64 libxi-dev:arm64 \
@@ -68,18 +67,47 @@ jobs:
             libwayland-dev:arm64 libwayland-egl1:arm64 libdecor-0-dev:arm64 \
             wayland-protocols
 
-      - name: Locate iso9660.h (arm64)
-        run: |
-          set -eux
-          dpkg -L libcdio-dev:arm64 | grep -E 'cdio/iso9660\.h' || true
-          find /usr/include -type f -path '*cdio/iso9660.h' -print || true
-          ls -la /usr/include/aarch64-linux-gnu/cdio || true
-          ls -la /usr/include/cdio || true
-
       - name: Prepare third_party folder
         run: |
           set -eux
           mkdir -p "$GITHUB_WORKSPACE/third_party"
+
+      - name: Build libcdio (aarch64, from source)
+        run: |
+          set -eux
+          TP="$GITHUB_WORKSPACE/third_party"
+          PREFIX="$TP/libcdio/build"
+
+          if [ -f "$PREFIX/include/cdio/iso9660.h" ]; then
+            echo "libcdio already built."
+            exit 0
+          fi
+
+          mkdir -p "$TP/libcdio-src"
+          cd "$TP/libcdio-src"
+
+          VER="2.2.0"
+          TAR="libcdio-${VER}.tar.gz"
+
+          if [ ! -d "libcdio-${VER}" ]; then
+            curl -L -o "$TAR" "https://ftp.gnu.org/gnu/libcdio/${TAR}"
+            tar xf "$TAR"
+          fi
+
+          cd "libcdio-${VER}"
+
+          ./configure \
+            --host=aarch64-linux-gnu \
+            --build=x86_64-linux-gnu \
+            --prefix="$PREFIX" \
+            --enable-static \
+            --disable-shared \
+            --disable-nls
+
+          make -j"$(nproc)"
+          make install
+
+          test -f "$PREFIX/include/cdio/iso9660.h"
 
       - name: Build FFmpeg (aarch64)
         run: |
@@ -157,9 +185,6 @@ jobs:
       - name: Build 3sx (Linux ARM64)
         run: |
           set -o pipefail
-
-          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
-          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
 
           cmake -S . -B build-linux-arm64 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
