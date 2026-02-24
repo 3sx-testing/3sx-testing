@@ -3,7 +3,10 @@
 #include "port/sdl/sdl_app.h"
 
 #include <SDL3/SDL.h>
+
+#ifdef ENABLE_ISO_SUPPORT
 #include <cdio/iso9660.h>
+#endif
 
 typedef enum FlowState { INIT, DIALOG_OPENED, COPY_ERROR, COPY_SUCCESS } ResourceCopyingFlowState;
 
@@ -28,25 +31,31 @@ static void create_resources_directory() {
     SDL_free(path);
 }
 
+#ifdef ENABLE_ISO_SUPPORT
 #define CHUNK_SECTORS 16
 #define BUFFER_SIZE (ISO_BLOCKSIZE * CHUNK_SECTORS)
 
 static void open_file_dialog_callback(void* userdata, const char* const* filelist, int filter) {
+    (void)userdata;
+    (void)filter;
+
+    if (!filelist || !filelist[0]) {
+        flow_state = COPY_ERROR;
+        return;
+    }
+
     const char* iso_path = filelist[0];
 
     iso9660_t* iso = iso9660_open(iso_path);
-
     if (iso == NULL) {
         flow_state = COPY_ERROR;
         return;
     }
 
     iso9660_stat_t* stat = iso9660_ifs_stat(iso, "/THIRD/SF33RD.AFS;1");
-
     if (stat == NULL) {
         // Try a different path
         stat = iso9660_ifs_stat(iso, "/SF33RD.AFS;1");
-
         if (stat == NULL) {
             iso9660_close(iso);
             flow_state = COPY_ERROR;
@@ -59,19 +68,34 @@ static void open_file_dialog_callback(void* userdata, const char* const* filelis
     SDL_IOStream* dst_io = SDL_IOFromFile(dst_path, "w");
     SDL_free(dst_path);
 
+    if (!dst_io) {
+        iso9660_stat_free(stat);
+        iso9660_close(iso);
+        flow_state = COPY_ERROR;
+        return;
+    }
+
     uint8_t buffer[BUFFER_SIZE];
     uint64_t bytes_remaining = stat->total_size;
     lsn_t current_lsn = stat->lsn;
 
     while (bytes_remaining > 0) {
-        const uint64_t bytes_to_read = SDL_min(sizeof(buffer), bytes_remaining);
+        const uint64_t bytes_to_read = SDL_min((uint64_t)sizeof(buffer), bytes_remaining);
         const uint64_t sectors_to_read = (bytes_to_read + ISO_BLOCKSIZE - 1) / ISO_BLOCKSIZE;
 
-        const long bytes_read = iso9660_iso_seek_read(iso, buffer, current_lsn, sectors_to_read);
-        SDL_WriteIO(dst_io, buffer, bytes_read);
+        const long bytes_read = iso9660_iso_seek_read(iso, buffer, current_lsn, (unsigned int)sectors_to_read);
+        if (bytes_read <= 0) {
+            SDL_CloseIO(dst_io);
+            iso9660_stat_free(stat);
+            iso9660_close(iso);
+            flow_state = COPY_ERROR;
+            return;
+        }
 
-        bytes_remaining -= bytes_read;
-        current_lsn += sectors_to_read;
+        SDL_WriteIO(dst_io, buffer, (size_t)bytes_read);
+
+        bytes_remaining -= (uint64_t)bytes_read;
+        current_lsn += (lsn_t)sectors_to_read;
     }
 
     iso9660_stat_free(stat);
@@ -85,6 +109,7 @@ static void open_dialog() {
     const SDL_DialogFileFilter filter = { .name = "Game iso", .pattern = "iso" };
     SDL_ShowOpenFileDialog(open_file_dialog_callback, NULL, window, &filter, 1, NULL, false);
 }
+#endif // ENABLE_ISO_SUPPORT
 
 char* Resources_GetPath(const char* file_path) {
     const char* base = Paths_GetPrefPath();
@@ -100,11 +125,11 @@ char* Resources_GetPath(const char* file_path) {
 }
 
 bool Resources_CheckIfPresent() {
-    const bool afs_present = check_if_file_present("SF33RD.AFS");
-    return afs_present;
+    return check_if_file_present("SF33RD.AFS");
 }
 
 bool Resources_RunResourceCopyingFlow() {
+#ifdef ENABLE_ISO_SUPPORT
     switch (flow_state) {
     case INIT:
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
@@ -125,7 +150,7 @@ bool Resources_RunResourceCopyingFlow() {
         open_dialog();
         break;
 
-    case COPY_SUCCESS:
+    case COPY_SUCCESS: {
         char* resources_path = Resources_GetPath(NULL);
         char* message = NULL;
         SDL_asprintf(&message, "You can find them at:\n%s", resources_path);
@@ -135,6 +160,35 @@ bool Resources_RunResourceCopyingFlow() {
         flow_state = INIT;
         return true;
     }
+    }
+#else
+    // ISO support disabled: user must provide SF33RD.AFS manually
+    if (flow_state == INIT) {
+        create_resources_directory();
+        char* resources_path = Resources_GetPath(NULL);
+        char* message = NULL;
+        SDL_asprintf(&message,
+                     "SF33RD.AFS is missing.\n\n"
+                     "ISO extraction is disabled in this build.\n"
+                     "Please copy:\n  SF33RD.AFS\n"
+                     "into:\n%s",
+                     resources_path);
+
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Resources are missing", message, window);
+
+        SDL_free(resources_path);
+        SDL_free(message);
+
+        // Don't spam the message every frame
+        flow_state = DIALOG_OPENED;
+    }
+
+    // Once the user drops the file, we can complete.
+    if (Resources_CheckIfPresent()) {
+        flow_state = INIT;
+        return true;
+    }
+#endif
 
     return false;
 }
