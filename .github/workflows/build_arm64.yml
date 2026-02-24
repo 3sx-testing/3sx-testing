@@ -49,9 +49,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party
-          key: Linux-arm64-cross-${{ hashFiles('cmake/**', '.github/workflows/**') }}
+          key: Linux-arm64-cross-${{ hashFiles('cmake/**', '.github/workflows/**', 'build-deps.sh') }}
 
-      - name: Install ARM64 build dependencies
+      - name: Install ARM64 build dependencies (no libcdio)
         run: |
           apt-get update
           apt-get install -y \
@@ -72,59 +72,8 @@ jobs:
           set -eux
           mkdir -p "$GITHUB_WORKSPACE/third_party"
 
-      - name: Build libcdio (aarch64, from source)
-        run: |
-          set -eux
-          TP="$GITHUB_WORKSPACE/third_party"
-          PREFIX="$TP/libcdio/build"
-
-          if [ -f "$PREFIX/include/cdio/iso9660.h" ]; then
-            echo "libcdio already built."
-            exit 0
-          fi
-
-          mkdir -p "$TP/libcdio-src"
-          cd "$TP/libcdio-src"
-
-          VER="2.2.0"
-          TAR="libcdio-${VER}.tar.gz"
-          URLS=(
-            "https://ftp.gnu.org/gnu/libcdio/${TAR}"
-            "https://ftpmirror.gnu.org/libcdio/${TAR}"
-            "https://github.com/libcdio/libcdio/releases/download/${VER}/${TAR}"
-          )
-
-          if [ ! -f "$TAR" ]; then
-            for u in "${URLS[@]}"; do
-              echo "Trying: $u"
-              if curl -fL --retry 3 --retry-delay 2 -o "$TAR" "$u"; then
-                break
-              fi
-            done
-          fi
-
-          # Sanity check: must be a gzip-compressed tarball
-          file "$TAR"
-          file "$TAR" | grep -qi 'gzip compressed' || (echo "Download is not a tar.gz (likely HTML). Aborting." && head -n 20 "$TAR" && exit 1)
-
-          rm -rf "libcdio-${VER}"
-          tar xzf "$TAR"
-          cd "libcdio-${VER}"
-
-          ./configure \
-            --host=aarch64-linux-gnu \
-            --build=x86_64-linux-gnu \
-            --prefix="$PREFIX" \
-            --enable-static \
-            --disable-shared \
-            --disable-nls
-
-          make -j"$(nproc)"
-          make install
-
-          test -f "$PREFIX/include/cdio/iso9660.h"
-
       - name: Build FFmpeg (aarch64)
+        shell: bash
         run: |
           set -eux
           TP="$GITHUB_WORKSPACE/third_party"
@@ -155,14 +104,17 @@ jobs:
             --cross-prefix=aarch64-linux-gnu- \
             --disable-x86asm \
             --disable-static --enable-shared \
-            --disable-all \
-            --enable-avcodec --enable-avformat \
-            --enable-avutil --enable-swresample
+            --disable-all --disable-autodetect \
+            --enable-avcodec --enable-avformat --enable-avutil --enable-swresample \
+            --enable-decoder=adpcm_adx --enable-parser=adx --enable-muxer=adx \
+            --enable-pic --extra-cflags="-fPIC" \
+            --extra-ldflags="-Wl,-rpath,\$ORIGIN/../lib"
 
           make -j"$(nproc)"
           make install
 
       - name: Build SDL3 (aarch64)
+        shell: bash
         run: |
           set -eux
           TP="$GITHUB_WORKSPACE/third_party"
@@ -197,16 +149,20 @@ jobs:
           cmake --build . --parallel
           cmake --install .
 
-      - name: Build 3sx (Linux ARM64)
+      - name: Build 3sx (Linux ARM64, ISO support OFF)
+        shell: bash
         run: |
           set -o pipefail
 
+          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+
           cmake -S . -B build-linux-arm64 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake"
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
+            -DENABLE_ISO_SUPPORT=OFF
 
           cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
-        shell: bash
 
       - name: Package ARM64 build
         run: |
@@ -225,3 +181,10 @@ jobs:
           file build-linux-arm64/3sx | grep -q aarch64 \
             && echo "✅ ARM64 confirmed" \
             || (echo "❌ Wrong architecture" && exit 1)
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-arm64-cross
+          path: build.log
