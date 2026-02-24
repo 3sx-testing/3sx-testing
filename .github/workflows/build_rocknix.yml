@@ -91,17 +91,11 @@ jobs:
           # SYSROOT comes from previous step via GITHUB_ENV
           test -n "${SYSROOT:-}" || (echo "SYSROOT not set" && exit 1)
 
-          {
-            # Key fix: pkg-config rewrites -I/usr/include -> -I$SYSROOT/usr/include
-            echo "PKG_CONFIG_SYSROOT_DIR=$SYSROOT"
-
-            # Use sysroot .pc files only
-            echo "PKG_CONFIG_PATH="
-            echo "PKG_CONFIG_LIBDIR=$SYSROOT/usr/lib/aarch64-linux-gnu/pkgconfig:$SYSROOT/usr/lib/pkgconfig:$SYSROOT/usr/share/pkgconfig"
-
-            # Optional but helps some pkg-config setups
-            echo "PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1"
-            echo "PKG_CONFIG_ALLOW_SYSTEM_LIBS=1"
+          echo "PKG_CONFIG_SYSROOT_DIR=$SYSROOT" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_LIBDIR=$SYSROOT/usr/lib/aarch64-linux-gnu/pkgconfig:$SYSROOT/usr/lib/pkgconfig:$SYSROOT/usr/share/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_ALLOW_SYSTEM_LIBS=1" >> "$GITHUB_ENV"
           } >> "$GITHUB_ENV"
 
       - name: Prepare third_party folder
