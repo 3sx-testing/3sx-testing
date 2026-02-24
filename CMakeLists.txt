@@ -133,38 +133,30 @@ include_directories(
 
 # ---- libcdio handling (Linux) ----
 if(UNIX AND NOT APPLE)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(CDIO REQUIRED libcdio)
+    set(LOCAL_CDIO_ROOT "${CMAKE_SOURCE_DIR}/third_party/libcdio/build")
 
-    # 1️⃣ Include dirs from pkg-config
-    target_include_directories(3sx PRIVATE ${CDIO_INCLUDE_DIRS})
+    if(EXISTS "${LOCAL_CDIO_ROOT}/include/cdio/iso9660.h")
+        message(STATUS "Using bundled libcdio from: ${LOCAL_CDIO_ROOT}")
+        target_include_directories(3sx PRIVATE "${LOCAL_CDIO_ROOT}/include")
 
-    # 2️⃣ FORCE multiarch include dir (fixes cdio/iso9660.h not found)
-    if(EXISTS "/usr/include/aarch64-linux-gnu")
-        target_include_directories(3sx PRIVATE /usr/include/aarch64-linux-gnu)
+        # Static libs (names can vary slightly; these two are typical)
+        if(EXISTS "${LOCAL_CDIO_ROOT}/lib/libcdio.a")
+            target_link_libraries(3sx PRIVATE "${LOCAL_CDIO_ROOT}/lib/libcdio.a")
+        endif()
+        if(EXISTS "${LOCAL_CDIO_ROOT}/lib/libiso9660.a")
+            target_link_libraries(3sx PRIVATE "${LOCAL_CDIO_ROOT}/lib/libiso9660.a")
+        endif()
+    else()
+        # Fallback to system pkg-config
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(CDIO REQUIRED libcdio)
+        target_include_directories(3sx PRIVATE ${CDIO_INCLUDE_DIRS})
+        target_link_libraries(3sx PRIVATE ${CDIO_LIBRARIES})
     endif()
-
-    # 3️⃣ Apply raw cflags from pkg-config (sometimes needed)
-    if(CDIO_CFLAGS)
-        string(REGEX REPLACE ";" " " _cdio_cflags_str "${CDIO_CFLAGS}")
-        separate_arguments(_cdio_cflags_list UNIX_COMMAND "${_cdio_cflags_str}")
-        target_compile_options(3sx PRIVATE ${_cdio_cflags_list})
-    endif()
-
-    # 4️⃣ Link libraries
-    target_link_libraries(3sx PRIVATE ${CDIO_LIBRARIES})
-
-    # 5️⃣ Fallback: link iso9660 if separate
-    find_library(ISO9660_LIB iso9660)
-    if(ISO9660_LIB)
-        target_link_libraries(3sx PRIVATE ${ISO9660_LIB})
-    endif()
-
 else()
-    # Fallback for Apple/Windows where we vendor libcdio as static libs
+    # Apple/Windows vendored libs (unchanged)
     set(LIBCDIO_ROOT "${THIRD_PARTY_DIR}/libcdio/build")
     include_directories(${LIBCDIO_ROOT}/include)
-
     target_link_libraries(3sx PRIVATE
         "${LIBCDIO_ROOT}/lib/libiso9660.a"
         "${LIBCDIO_ROOT}/lib/libcdio.a"
