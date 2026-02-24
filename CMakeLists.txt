@@ -136,10 +136,15 @@ include_directories(
 # On Apple/Windows, keep the existing vendored/static approach.
 if(UNIX AND NOT APPLE)
     find_package(PkgConfig REQUIRED)
-    pkg_check_modules(CDIO REQUIRED libcdio libiso9660)
+    pkg_check_modules(CDIO REQUIRED libcdio)
 
     target_include_directories(3sx PRIVATE ${CDIO_INCLUDE_DIRS})
     target_link_libraries(3sx PRIVATE ${CDIO_LIBRARIES})
+
+# If your code actually needs iso9660 symbols and link fails later,
+# uncomment the next line (Ubuntu often has the library but no .pc):
+# target_link_libraries(3sx PRIVATE iso9660)
+
 else()
     set(LIBCDIO_ROOT "${THIRD_PARTY_DIR}/libcdio/build")
     include_directories(${LIBCDIO_ROOT}/include)
