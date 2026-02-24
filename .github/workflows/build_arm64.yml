@@ -55,8 +55,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y \
-            libcdio-dev libcdio-dev:arm64 \
-            libcdio-cdda-dev:arm64 libcdio-paranoia-dev:arm64 \
+            libcdio-dev:arm64 libcdio-cdda-dev:arm64 libcdio-paranoia-dev:arm64 \
             libasound2-dev:arm64 libpulse-dev:arm64 \
             libx11-dev:arm64 libxext-dev:arm64 libxrandr-dev:arm64 \
             libxcursor-dev:arm64 libxfixes-dev:arm64 libxi-dev:arm64 \
@@ -68,15 +67,6 @@ jobs:
             libpipewire-0.3-dev:arm64 \
             libwayland-dev:arm64 libwayland-egl1:arm64 libdecor-0-dev:arm64 \
             wayland-protocols
-
-      - name: Verify libcdio headers exist (arm64)
-        run: |
-          set -eux
-          # where the header usually lands
-          ls -la /usr/include/cdio || true
-          ls -la /usr/include/aarch64-linux-gnu/cdio || true
-          # find it anywhere (last resort)
-          find /usr/include -maxdepth 4 -type f -name iso9660.h -o -name cdio.h | head -n 50 || true
 
       - name: Prepare third_party folder
         run: |
@@ -160,14 +150,8 @@ jobs:
         run: |
           set -o pipefail
 
-          # pkg-config must resolve ARM64 modules
           export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
           export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
-
-          # force multiarch headers to be visible during cross-compile
-          export CPPFLAGS="-I/usr/include/aarch64-linux-gnu"
-          export CFLAGS="-I/usr/include/aarch64-linux-gnu"
-          export CXXFLAGS="-I/usr/include/aarch64-linux-gnu"
 
           cmake -S . -B build-linux-arm64 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
