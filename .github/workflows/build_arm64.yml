@@ -14,9 +14,6 @@ jobs:
       image: ubuntu:25.04
 
     steps:
-      # ------------------------------------------------------------
-      # Toolchain + Base Setup
-      # ------------------------------------------------------------
       - name: Install toolchain
         run: |
           apt-get update
@@ -43,26 +40,17 @@ jobs:
             autoconf automake libtool gettext texinfo \
             clang zip file qemu-user-static
 
-      # ------------------------------------------------------------
-      # Checkout Repo
-      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # ------------------------------------------------------------
-      # Cache third_party builds
-      # ------------------------------------------------------------
       - name: Cache dependencies
         uses: actions/cache@v4
         with:
           path: third_party
           key: Linux-arm64-cross-${{ hashFiles('cmake/**', '.github/workflows/**') }}
 
-      # ------------------------------------------------------------
-      # ARM64 system deps
-      # ------------------------------------------------------------
       - name: Install ARM64 build dependencies
         run: |
           apt-get install -y \
@@ -79,17 +67,28 @@ jobs:
             libwayland-dev:arm64 libwayland-egl1:arm64 libdecor-0-dev:arm64 \
             wayland-protocols
 
-      # ------------------------------------------------------------
-      # Build FFmpeg
-      # ------------------------------------------------------------
+      - name: Debug workspace + create third_party
+        run: |
+          set -eux
+          echo "PWD=$(pwd)"
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          ls -la
+          mkdir -p "$GITHUB_WORKSPACE/third_party"
+          ls -la "$GITHUB_WORKSPACE/third_party"
+
       - name: Build FFmpeg (aarch64)
         run: |
           set -eux
-          cd third_party
-          FFMPEG="ffmpeg-8.0"
-          INSTALL="$GITHUB_WORKSPACE/third_party/ffmpeg/build"
+          TP="$GITHUB_WORKSPACE/third_party"
+          cd "$TP"
 
-          if [ -f "$INSTALL/lib/libavcodec.so" ]; then exit 0; fi
+          FFMPEG="ffmpeg-8.0"
+          INSTALL="$TP/ffmpeg/build"
+
+          if [ -f "$INSTALL/lib/libavcodec.so" ]; then
+            echo "FFmpeg already built."
+            exit 0
+          fi
 
           mkdir -p ffmpeg && cd ffmpeg
           if [ ! -d "$FFMPEG" ]; then
@@ -112,20 +111,22 @@ jobs:
             --enable-avcodec --enable-avformat \
             --enable-avutil --enable-swresample
 
-          make -j$(nproc)
+          make -j"$(nproc)"
           make install
 
-      # ------------------------------------------------------------
-      # Build SDL3
-      # ------------------------------------------------------------
       - name: Build SDL3 (aarch64)
         run: |
           set -eux
-          cd third_party
-          SDL="SDL3-3.2.24"
-          INSTALL="$GITHUB_WORKSPACE/third_party/sdl3/build"
+          TP="$GITHUB_WORKSPACE/third_party"
+          cd "$TP"
 
-          if [ -f "$INSTALL/lib/libSDL3.so" ]; then exit 0; fi
+          SDL="SDL3-3.2.24"
+          INSTALL="$TP/sdl3/build"
+
+          if [ -f "$INSTALL/lib/libSDL3.so" ] || [ -f "$INSTALL/lib64/libSDL3.so" ]; then
+            echo "SDL3 already built."
+            exit 0
+          fi
 
           mkdir -p sdl3 && cd sdl3
           if [ ! -d "$SDL" ]; then
@@ -141,26 +142,21 @@ jobs:
           cmake .. -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
             -DCMAKE_INSTALL_PREFIX="$INSTALL" \
-            -DBUILD_SHARED_LIBS=ON
+            -DBUILD_SHARED_LIBS=ON \
+            -DSDL_STATIC=OFF
 
           cmake --build . --parallel
           cmake --install .
 
-      # ------------------------------------------------------------
-      # Build 3sx
-      # ------------------------------------------------------------
       - name: Build 3sx (Linux ARM64)
         run: |
           set -o pipefail
           cmake -S . -B build-linux-arm64 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake"
-
           cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
+        shell: bash
 
-      # ------------------------------------------------------------
-      # Package
-      # ------------------------------------------------------------
       - name: Package ARM64 build
         run: |
           mkdir -p dist
