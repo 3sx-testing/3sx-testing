@@ -24,17 +24,14 @@ jobs:
             crossbuild-essential-arm64 \
             clang zip file
 
-          # Enable arm64 packages (ports)
           dpkg --add-architecture arm64
 
-          # Pin existing DEB822 sources to amd64-only
           for f in /etc/apt/sources.list.d/*.sources; do
             if [ -f "$f" ] && ! grep -q 'Architectures:' "$f"; then
               sed -i '/^Types:/a Architectures: amd64' "$f"
             fi
           done
 
-          # Add arm64 ports sources
           printf '%s\n' \
             'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports plucky main restricted universe multiverse' \
             'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports plucky-updates main restricted universe multiverse' \
@@ -54,7 +51,7 @@ jobs:
           path: third_party
           key: Linux-arm64-cross-${{ hashFiles('build-deps.sh', 'CMakeLists.txt', 'cmake/**', '.github/workflows/**') }}
 
-      - name: Install ARM64 dev libs for SDL3 (from apt)
+      - name: Install ARM64 dev libs for SDL3
         shell: bash
         run: |
           set -euxo pipefail
@@ -72,23 +69,10 @@ jobs:
             libwayland-dev:arm64 libwayland-egl1:arm64 libdecor-0-dev:arm64 \
             wayland-protocols
 
-      # NOTE: we still set the cross pkg-config libdir, but we will later
-      # PREPEND our locally-built libcdio pkgconfig path.
-      - name: Set pkg-config for cross (arm64)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1" >> "$GITHUB_ENV"
-
       - name: Prepare third_party folder
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/third_party"
+        run: mkdir -p third_party
 
-      - name: Build libcdio (aarch64) -> third_party/libcdio/build
+      - name: Build libcdio (aarch64)
         shell: bash
         run: |
           set -euxo pipefail
@@ -97,9 +81,8 @@ jobs:
           SRC="$TP/libcdio-src"
           VER="2.2.0"
 
-          # If already built, skip
           if [ -f "$PREFIX/include/cdio/iso9660.h" ] && [ -f "$PREFIX/lib/libcdio.a" ]; then
-            echo "libcdio already built in $PREFIX"
+            echo "libcdio already built."
             exit 0
           fi
 
@@ -107,8 +90,7 @@ jobs:
           mkdir -p "$SRC"
           cd "$SRC"
 
-          curl -L --retry 5 --retry-delay 2 \
-            -o "libcdio-${VER}.tar.bz2" \
+          curl -L -o "libcdio-${VER}.tar.bz2" \
             "https://github.com/libcdio/libcdio/releases/download/${VER}/libcdio-${VER}.tar.bz2"
 
           tar xf "libcdio-${VER}.tar.bz2"
@@ -123,12 +105,7 @@ jobs:
           make -j"$(nproc)"
           make install
 
-          test -f "$PREFIX/include/cdio/iso9660.h"
-          test -f "$PREFIX/lib/libcdio.a"
-
-      # ✅ NEW: Create a libcdio.pc and prepend it to PKG_CONFIG_PATH so
-      # CMake's pkg_check_modules(libcdio REQUIRED libcdio) succeeds.
-      - name: Register local libcdio for pkg-config
+      - name: Register libcdio for pkg-config
         shell: bash
         run: |
           set -euxo pipefail
@@ -149,39 +126,23 @@ Libs: -L\${libdir} -lcdio -liso9660
 Cflags: -I\${includedir}
 EOF
 
-          # Prepend our local .pc path so pkg-config finds it first
-          echo "PKG_CONFIG_PATH=$PCDIR:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> "$GITHUB_ENV"
-
-          # Sanity check
-          pkg-config --modversion libcdio
-          pkg-config --cflags --libs libcdio
-
       - name: Build FFmpeg (aarch64)
         shell: bash
         run: |
           set -euxo pipefail
           TP="$GITHUB_WORKSPACE/third_party"
-          cd "$TP"
-
-          FFMPEG="ffmpeg-8.0"
           INSTALL="$TP/ffmpeg/build"
 
           if [ -f "$INSTALL/lib/libavcodec.so" ]; then
-            echo "FFmpeg already built."
             exit 0
           fi
 
-          mkdir -p ffmpeg && cd ffmpeg
-          if [ ! -d "$FFMPEG" ]; then
-            curl -L -O "https://ffmpeg.org/releases/$FFMPEG.tar.xz"
-            tar xf "$FFMPEG.tar.xz"
-          fi
+          cd "$TP"
+          curl -L -O https://ffmpeg.org/releases/ffmpeg-8.0.tar.xz
+          tar xf ffmpeg-8.0.tar.xz
+          cd ffmpeg-8.0
 
-          cd "$FFMPEG"
-          mkdir -p build && cd build
-
-          ../configure \
+          ./configure \
             --prefix="$INSTALL" \
             --arch=aarch64 \
             --target-os=linux \
@@ -189,7 +150,7 @@ EOF
             --cross-prefix=aarch64-linux-gnu- \
             --disable-x86asm \
             --disable-static --enable-shared \
-            --disable-all --disable-autodetect \
+            --disable-all \
             --enable-avcodec --enable-avformat --enable-avutil --enable-swresample \
             --enable-decoder=adpcm_adx --enable-parser=adx --enable-muxer=adx
 
@@ -201,38 +162,36 @@ EOF
         run: |
           set -euxo pipefail
           TP="$GITHUB_WORKSPACE/third_party"
-          cd "$TP"
-
-          SDL="SDL3-3.2.24"
           INSTALL="$TP/sdl3/build"
 
-          if [ -f "$INSTALL/lib/libSDL3.so" ] || [ -f "$INSTALL/lib64/libSDL3.so" ]; then
-            echo "SDL3 already built."
+          if [ -f "$INSTALL/lib/libSDL3.so" ]; then
             exit 0
           fi
 
-          mkdir -p sdl3 && cd sdl3
-          if [ ! -d "$SDL" ]; then
-            curl -L -O "https://libsdl.org/release/$SDL.tar.gz"
-            tar xf "$SDL.tar.gz"
-          fi
+          cd "$TP"
+          curl -L -O https://libsdl.org/release/SDL3-3.2.24.tar.gz
+          tar xf SDL3-3.2.24.tar.gz
+          cd SDL3-3.2.24
 
-          cd "$SDL"
-          mkdir -p build && cd build
-
-          cmake .. -G Ninja \
+          cmake -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
             -DCMAKE_INSTALL_PREFIX="$INSTALL" \
-            -DBUILD_SHARED_LIBS=ON \
-            -DSDL_STATIC=OFF
+            -DBUILD_SHARED_LIBS=ON
 
-          cmake --build . --parallel
-          cmake --install .
+          cmake --build build --parallel
+          cmake --install build
 
       - name: Build 3sx (Linux ARM64)
         shell: bash
         run: |
-          set -o pipefail
+          set -euxo pipefail
+
+          export LIBCDIO_PC="$GITHUB_WORKSPACE/third_party/libcdio/build/lib/pkgconfig"
+          export PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+          unset PKG_CONFIG_LIBDIR
+
+          pkg-config --modversion libcdio
+          pkg-config --cflags --libs libcdio
 
           cmake -S . -B build-linux-arm64 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -240,29 +199,5 @@ EOF
 
           cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
 
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log-linux-arm64
-          path: build.log
-
-      - name: Package ARM64 build
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p dist
-          cp build-linux-arm64/3sx dist/
-          (cd dist && tar -czf ../3sx-linux-arm64.tar.gz .)
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: 3sx-linux-arm64
-          path: 3sx-linux-arm64.tar.gz
-
       - name: Verify architecture
-        shell: bash
-        run: |
-          set -euxo pipefail
-          file build-linux-arm64/3sx | grep -q aarch64
+        run: file build-linux-arm64/3sx | grep -q aarch64
