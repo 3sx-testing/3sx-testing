@@ -116,20 +116,39 @@ endif()
 # ======================================
 
 set(THIRD_PARTY_DIR "${CMAKE_SOURCE_DIR}/third_party")
-set(FFMPEG_ROOT "${THIRD_PARTY_DIR}/ffmpeg/build")
-set(SDL3_ROOT "${THIRD_PARTY_DIR}/sdl3/build")
-set(LIBCDIO_ROOT "${THIRD_PARTY_DIR}/libcdio/build")
+
+# Allow overriding roots (Flatpak uses /app)
+if(NOT DEFINED FFMPEG_ROOT)
+    set(FFMPEG_ROOT "${THIRD_PARTY_DIR}/ffmpeg/build")
+endif()
+
+if(NOT DEFINED SDL3_ROOT)
+    set(SDL3_ROOT "${THIRD_PARTY_DIR}/sdl3/build")
+endif()
 
 include_directories(
     ${FFMPEG_ROOT}/include
     ${SDL3_ROOT}/include
-    ${LIBCDIO_ROOT}/include
 )
 
-target_link_libraries(3sx PRIVATE
-    "${LIBCDIO_ROOT}/lib/libiso9660.a"
-    "${LIBCDIO_ROOT}/lib/libcdio.a"
-)
+# ---- libcdio handling ----
+# On Linux, prefer system libcdio via pkg-config (works for cross-compile + Flatpak-style builds)
+# On Apple/Windows, keep the existing vendored/static approach.
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(CDIO REQUIRED libcdio libiso9660)
+
+    target_include_directories(3sx PRIVATE ${CDIO_INCLUDE_DIRS})
+    target_link_libraries(3sx PRIVATE ${CDIO_LIBRARIES})
+else()
+    set(LIBCDIO_ROOT "${THIRD_PARTY_DIR}/libcdio/build")
+    include_directories(${LIBCDIO_ROOT}/include)
+
+    target_link_libraries(3sx PRIVATE
+        "${LIBCDIO_ROOT}/lib/libiso9660.a"
+        "${LIBCDIO_ROOT}/lib/libcdio.a"
+    )
+endif()
 
 if(APPLE)
     target_link_libraries(3sx PRIVATE
@@ -148,7 +167,7 @@ elseif(WIN32)
         ${FFMPEG_ROOT}/lib/libswresample.dll.a
         ${SDL3_ROOT}/lib/libSDL3.dll.a
         iconv
-		dbghelp
+        dbghelp
     )
     target_link_options(3sx PRIVATE
         --for-linker
