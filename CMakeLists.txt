@@ -90,7 +90,6 @@ endif()
 
 target_compile_options(3sx PRIVATE
     -Wall
-    -Werror
     -fno-strict-aliasing
     ${DISABLED_WARNINGS}
 )
