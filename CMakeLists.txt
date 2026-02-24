@@ -136,27 +136,30 @@ if(UNIX AND NOT APPLE)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(CDIO REQUIRED libcdio)
 
-    # Add include dirs provided by pkg-config (list of paths)
+    # 1️⃣ Include dirs from pkg-config
     target_include_directories(3sx PRIVATE ${CDIO_INCLUDE_DIRS})
 
-    # Also add raw cflags (these include -I flags). This ensures the compiler
-    # actually receives any non-standard flags pkg-config may return.
+    # 2️⃣ FORCE multiarch include dir (fixes cdio/iso9660.h not found)
+    if(EXISTS "/usr/include/aarch64-linux-gnu")
+        target_include_directories(3sx PRIVATE /usr/include/aarch64-linux-gnu)
+    endif()
+
+    # 3️⃣ Apply raw cflags from pkg-config (sometimes needed)
     if(CDIO_CFLAGS)
-        # CDIO_CFLAGS is a string like "-I/some/path -D..."; split and apply.
         string(REGEX REPLACE ";" " " _cdio_cflags_str "${CDIO_CFLAGS}")
         separate_arguments(_cdio_cflags_list UNIX_COMMAND "${_cdio_cflags_str}")
         target_compile_options(3sx PRIVATE ${_cdio_cflags_list})
     endif()
 
-    # Link libraries reported by pkg-config
+    # 4️⃣ Link libraries
     target_link_libraries(3sx PRIVATE ${CDIO_LIBRARIES})
 
-    # Sometimes libiso9660 is available but has no pkg-config file.
-    # Try to find it and link if present.
+    # 5️⃣ Fallback: link iso9660 if separate
     find_library(ISO9660_LIB iso9660)
     if(ISO9660_LIB)
         target_link_libraries(3sx PRIVATE ${ISO9660_LIB})
     endif()
+
 else()
     # Fallback for Apple/Windows where we vendor libcdio as static libs
     set(LIBCDIO_ROOT "${THIRD_PARTY_DIR}/libcdio/build")
