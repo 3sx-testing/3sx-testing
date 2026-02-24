@@ -18,23 +18,20 @@ jobs:
         run: |
           set -euxo pipefail
           apt-get update
-          apt-get install -y git curl xz-utils ca-certificates tar \
+          apt-get install -y git curl xz-utils bzip2 ca-certificates tar \
             cmake ninja-build make pkg-config \
             autoconf automake libtool gettext texinfo \
             crossbuild-essential-arm64 \
             clang zip file
 
-          # Enable arm64 packages (ports)
           dpkg --add-architecture arm64
 
-          # Pin existing DEB822 sources to amd64-only
           for f in /etc/apt/sources.list.d/*.sources; do
             if [ -f "$f" ] && ! grep -q 'Architectures:' "$f"; then
               sed -i '/^Types:/a Architectures: amd64' "$f"
             fi
           done
 
-          # Add arm64 ports sources
           printf '%s\n' \
             'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports plucky main restricted universe multiverse' \
             'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports plucky-updates main restricted universe multiverse' \
@@ -86,7 +83,7 @@ jobs:
           set -euxo pipefail
           mkdir -p "$GITHUB_WORKSPACE/third_party"
 
-      - name: Build libcdio (aarch64) -> third_party/libcdio/build
+      - name: Build libcdio (aarch64)
         shell: bash
         run: |
           set -euxo pipefail
@@ -95,7 +92,6 @@ jobs:
           SRC="$TP/libcdio-src"
           VER="2.2.0"
 
-          # If already built, skip
           if [ -f "$PREFIX/include/cdio/iso9660.h" ] && [ -f "$PREFIX/lib/libcdio.a" ]; then
             echo "libcdio already built in $PREFIX"
             exit 0
@@ -105,15 +101,14 @@ jobs:
           mkdir -p "$SRC"
           cd "$SRC"
 
-          # Use official release tarball (NOT the broken 286B file)
+          # Switch to .tar.gz to avoid lbzip2 dependency in CI
           curl -L --retry 5 --retry-delay 2 \
-            -o "libcdio-${VER}.tar.bz2" \
-            "https://github.com/libcdio/libcdio/releases/download/${VER}/libcdio-${VER}.tar.bz2"
+            -o "libcdio-${VER}.tar.gz" \
+            "https://github.com/libcdio/libcdio/releases/download/${VER}/libcdio-${VER}.tar.gz"
 
-          tar xf "libcdio-${VER}.tar.bz2"
+          tar xzf "libcdio-${VER}.tar.gz"
           cd "libcdio-${VER}"
 
-          # Build static libs + headers for aarch64
           ./configure \
             --host=aarch64-linux-gnu \
             --prefix="$PREFIX" \
@@ -124,6 +119,32 @@ jobs:
           make install
 
           test -f "$PREFIX/include/cdio/iso9660.h"
+          test -f "$PREFIX/lib/libcdio.a"
+
+      - name: Create libcdio.pc for pkg-config (local)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
+          PCDIR="$PREFIX/lib/pkgconfig"
+          mkdir -p "$PCDIR"
+
+          # No heredoc (YAML-safe)
+          printf '%s\n' \
+            "prefix=$PREFIX" \
+            "exec_prefix=\${prefix}" \
+            "libdir=\${prefix}/lib" \
+            "includedir=\${prefix}/include" \
+            "" \
+            "Name: libcdio" \
+            "Description: Compact Disc Input and Control Library" \
+            "Version: 2.2.0" \
+            "Libs: -L\${libdir} -lcdio -liso9660" \
+            "Cflags: -I\${includedir}" \
+            > "$PCDIR/libcdio.pc"
+
+          ls -la "$PCDIR"
+          cat "$PCDIR/libcdio.pc"
 
       - name: Build FFmpeg (aarch64)
         shell: bash
@@ -197,11 +218,25 @@ jobs:
           cmake --build . --parallel
           cmake --install .
 
-      - name: Build 3sx (Linux ARM64)
+      - name: Build 3sx (Linux ARM64) - forced pkg-config for libcdio
         shell: bash
         run: |
-          set -o pipefail
+          set -euxo pipefail
 
+          LIBCDIO_PC="$GITHUB_WORKSPACE/third_party/libcdio/build/lib/pkgconfig"
+
+          echo "== sanity: pkg-config sees libcdio? =="
+          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+          PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
+          pkg-config --modversion libcdio
+
+          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+          PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
+          pkg-config --cflags --libs libcdio
+
+          echo "== configuring cmake =="
+          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+          PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
           cmake -S . -B build-linux-arm64 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake"
