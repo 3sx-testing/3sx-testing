@@ -72,6 +72,8 @@ jobs:
             libwayland-dev:arm64 libwayland-egl1:arm64 libdecor-0-dev:arm64 \
             wayland-protocols
 
+      # NOTE: we still set the cross pkg-config libdir, but we will later
+      # PREPEND our locally-built libcdio pkgconfig path.
       - name: Set pkg-config for cross (arm64)
         shell: bash
         run: |
@@ -105,7 +107,6 @@ jobs:
           mkdir -p "$SRC"
           cd "$SRC"
 
-          # Use official release tarball (NOT the broken 286B file)
           curl -L --retry 5 --retry-delay 2 \
             -o "libcdio-${VER}.tar.bz2" \
             "https://github.com/libcdio/libcdio/releases/download/${VER}/libcdio-${VER}.tar.bz2"
@@ -113,7 +114,6 @@ jobs:
           tar xf "libcdio-${VER}.tar.bz2"
           cd "libcdio-${VER}"
 
-          # Build static libs + headers for aarch64
           ./configure \
             --host=aarch64-linux-gnu \
             --prefix="$PREFIX" \
@@ -124,6 +124,38 @@ jobs:
           make install
 
           test -f "$PREFIX/include/cdio/iso9660.h"
+          test -f "$PREFIX/lib/libcdio.a"
+
+      # ✅ NEW: Create a libcdio.pc and prepend it to PKG_CONFIG_PATH so
+      # CMake's pkg_check_modules(libcdio REQUIRED libcdio) succeeds.
+      - name: Register local libcdio for pkg-config
+        shell: bash
+        run: |
+          set -euxo pipefail
+          PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
+          PCDIR="$PREFIX/lib/pkgconfig"
+          mkdir -p "$PCDIR"
+
+          cat > "$PCDIR/libcdio.pc" <<EOF
+prefix=$PREFIX
+exec_prefix=\${prefix}
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: libcdio
+Description: Compact Disc Input and Control Library
+Version: 2.2.0
+Libs: -L\${libdir} -lcdio -liso9660
+Cflags: -I\${includedir}
+EOF
+
+          # Prepend our local .pc path so pkg-config finds it first
+          echo "PKG_CONFIG_PATH=$PCDIR:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> "$GITHUB_ENV"
+
+          # Sanity check
+          pkg-config --modversion libcdio
+          pkg-config --cflags --libs libcdio
 
       - name: Build FFmpeg (aarch64)
         shell: bash
