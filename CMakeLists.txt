@@ -131,21 +131,34 @@ include_directories(
     ${SDL3_ROOT}/include
 )
 
-# ---- libcdio handling ----
-# On Linux, prefer system libcdio via pkg-config (works for cross-compile + Flatpak-style builds)
-# On Apple/Windows, keep the existing vendored/static approach.
+# ---- libcdio handling (Linux) ----
 if(UNIX AND NOT APPLE)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(CDIO REQUIRED libcdio)
 
+    # Add include dirs provided by pkg-config (list of paths)
     target_include_directories(3sx PRIVATE ${CDIO_INCLUDE_DIRS})
+
+    # Also add raw cflags (these include -I flags). This ensures the compiler
+    # actually receives any non-standard flags pkg-config may return.
+    if(CDIO_CFLAGS)
+        # CDIO_CFLAGS is a string like "-I/some/path -D..."; split and apply.
+        string(REGEX REPLACE ";" " " _cdio_cflags_str "${CDIO_CFLAGS}")
+        separate_arguments(_cdio_cflags_list UNIX_COMMAND "${_cdio_cflags_str}")
+        target_compile_options(3sx PRIVATE ${_cdio_cflags_list})
+    endif()
+
+    # Link libraries reported by pkg-config
     target_link_libraries(3sx PRIVATE ${CDIO_LIBRARIES})
 
-# If your code actually needs iso9660 symbols and link fails later,
-# uncomment the next line (Ubuntu often has the library but no .pc):
-# target_link_libraries(3sx PRIVATE iso9660)
-
+    # Sometimes libiso9660 is available but has no pkg-config file.
+    # Try to find it and link if present.
+    find_library(ISO9660_LIB iso9660)
+    if(ISO9660_LIB)
+        target_link_libraries(3sx PRIVATE ${ISO9660_LIB})
+    endif()
 else()
+    # Fallback for Apple/Windows where we vendor libcdio as static libs
     set(LIBCDIO_ROOT "${THIRD_PARTY_DIR}/libcdio/build")
     include_directories(${LIBCDIO_ROOT}/include)
 
