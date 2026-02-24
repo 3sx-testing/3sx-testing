@@ -10,6 +10,10 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+option(ENABLE_ISO_SUPPORT "Enable ISO9660 reading via libcdio" OFF)
+if(ENABLE_ISO_SUPPORT)
+  target_compile_definitions(3sx PRIVATE ENABLE_ISO_SUPPORT)
+endif()
 
 add_subdirectory(GekkoNet)
 
