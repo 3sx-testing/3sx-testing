@@ -88,12 +88,27 @@ jobs:
 
           VER="2.2.0"
           TAR="libcdio-${VER}.tar.gz"
+          URLS=(
+            "https://ftp.gnu.org/gnu/libcdio/${TAR}"
+            "https://ftpmirror.gnu.org/libcdio/${TAR}"
+            "https://github.com/libcdio/libcdio/releases/download/${VER}/${TAR}"
+          )
 
-          if [ ! -d "libcdio-${VER}" ]; then
-            curl -L -o "$TAR" "https://ftp.gnu.org/gnu/libcdio/${TAR}"
-            tar xf "$TAR"
+          if [ ! -f "$TAR" ]; then
+            for u in "${URLS[@]}"; do
+              echo "Trying: $u"
+              if curl -fL --retry 3 --retry-delay 2 -o "$TAR" "$u"; then
+                break
+              fi
+            done
           fi
 
+          # Sanity check: must be a gzip-compressed tarball
+          file "$TAR"
+          file "$TAR" | grep -qi 'gzip compressed' || (echo "Download is not a tar.gz (likely HTML). Aborting." && head -n 20 "$TAR" && exit 1)
+
+          rm -rf "libcdio-${VER}"
+          tar xzf "$TAR"
           cd "libcdio-${VER}"
 
           ./configure \
