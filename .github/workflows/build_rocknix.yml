@@ -1,0 +1,236 @@
+name: Build (RockNIX ARM64 Sysroot)
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:25.04
+
+    steps:
+      - name: Install toolchain + host build deps
+        shell: bash
+        run: |
+          set -euxo pipefail
+          apt-get update
+          apt-get install -y \
+            git curl ca-certificates xz-utils tar \
+            cmake ninja-build make pkg-config \
+            autoconf automake libtool gettext texinfo \
+            crossbuild-essential-arm64 \
+            file zip
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache third_party
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: rocknix-arm64-${{ hashFiles('CMakeLists.txt', 'cmake/**', '.github/workflows/**', 'build-deps.sh') }}
+
+      - name: Download RockNIX sysroot
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/sysroot"
+          curl -L --retry 5 --retry-delay 2 \
+            -o "$GITHUB_WORKSPACE/rocknix-sysroot.tgz" \
+            "https://github.com/3sx-testing/3sx-testing/releases/download/rocknix-sysroot/rocknix-sysroot.tgz"
+          tar -xzf "$GITHUB_WORKSPACE/rocknix-sysroot.tgz" -C "$GITHUB_WORKSPACE/sysroot"
+
+          # If the tarball contains a single top folder, normalize it to sysroot/rootfs
+          if [ -d "$GITHUB_WORKSPACE/sysroot/sysroot" ]; then
+            echo "Detected sysroot/sysroot; normalizing..."
+            rm -rf "$GITHUB_WORKSPACE/sysroot/rootfs"
+            mv "$GITHUB_WORKSPACE/sysroot/sysroot" "$GITHUB_WORKSPACE/sysroot/rootfs"
+          elif [ -d "$GITHUB_WORKSPACE/sysroot/rootfs" ]; then
+            echo "Sysroot already in sysroot/rootfs"
+          else
+            # fallback: pick the first directory
+            top="$(find "$GITHUB_WORKSPACE/sysroot" -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)"
+            mkdir -p "$GITHUB_WORKSPACE/sysroot/rootfs"
+            if [ -n "$top" ]; then
+              mv "$top"/* "$GITHUB_WORKSPACE/sysroot/rootfs/" || true
+            fi
+          fi
+
+          test -d "$GITHUB_WORKSPACE/sysroot/rootfs/usr/include" || (echo "Sysroot looks wrong (no usr/include)" && exit 1)
+
+      - name: Create CMake toolchain for RockNIX sysroot
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SYSROOT="$GITHUB_WORKSPACE/sysroot/rootfs"
+
+          cat > "$GITHUB_WORKSPACE/cmake/rocknix-aarch64.cmake" <<'EOF'
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR aarch64)
+
+          set(CMAKE_C_COMPILER aarch64-linux-gnu-gcc)
+          set(CMAKE_CXX_COMPILER aarch64-linux-gnu-g++)
+          set(CMAKE_AR aarch64-linux-gnu-ar)
+          set(CMAKE_RANLIB aarch64-linux-gnu-ranlib)
+          set(CMAKE_STRIP aarch64-linux-gnu-strip)
+
+          # SYSROOT is injected via -DCMAKE_SYSROOT=...
+          set(CMAKE_FIND_ROOT_PATH "${CMAKE_SYSROOT}")
+
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+
+          # Make sure compiler actually uses the sysroot
+          set(CMAKE_C_FLAGS_INIT   "--sysroot=${CMAKE_SYSROOT}")
+          set(CMAKE_CXX_FLAGS_INIT "--sysroot=${CMAKE_SYSROOT}")
+          EOF
+
+          echo "Toolchain written: cmake/rocknix-aarch64.cmake"
+          echo "SYSROOT=$SYSROOT"
+
+      - name: Set pkg-config env to sysroot
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SYSROOT="$GITHUB_WORKSPACE/sysroot/rootfs"
+
+          # Export for subsequent steps (GitHub Actions style)
+          {
+            echo "PKG_CONFIG_SYSROOT_DIR=$SYSROOT"
+            echo "PKG_CONFIG_PATH="
+            echo "PKG_CONFIG_LIBDIR=$SYSROOT/usr/lib/aarch64-linux-gnu/pkgconfig:$SYSROOT/usr/lib/pkgconfig:$SYSROOT/usr/share/pkgconfig"
+          } >> "$GITHUB_ENV"
+
+      - name: Prepare third_party folder
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/third_party"
+
+      - name: Build FFmpeg (aarch64, using RockNIX sysroot)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SYSROOT="$GITHUB_WORKSPACE/sysroot/rootfs"
+          TP="$GITHUB_WORKSPACE/third_party"
+
+          FFMPEG="ffmpeg-8.0"
+          INSTALL="$TP/ffmpeg/build"
+
+          if [ -f "$INSTALL/lib/libavcodec.so" ]; then
+            echo "FFmpeg already built."
+            exit 0
+          fi
+
+          mkdir -p "$TP/ffmpeg"
+          cd "$TP/ffmpeg"
+
+          if [ ! -d "$FFMPEG" ]; then
+            curl -L -O "https://ffmpeg.org/releases/$FFMPEG.tar.xz"
+            tar xf "$FFMPEG.tar.xz"
+          fi
+
+          cd "$FFMPEG"
+          mkdir -p build && cd build
+
+          ../configure \
+            --prefix="$INSTALL" \
+            --arch=aarch64 \
+            --target-os=linux \
+            --enable-cross-compile \
+            --cross-prefix=aarch64-linux-gnu- \
+            --sysroot="$SYSROOT" \
+            --disable-x86asm \
+            --disable-all --disable-autodetect \
+            --disable-static --enable-shared \
+            --enable-avcodec --enable-avformat --enable-avutil --enable-swresample \
+            --enable-decoder=adpcm_adx --enable-parser=adx --enable-muxer=adx \
+            --enable-pic --extra-cflags="--sysroot=$SYSROOT -fPIC" \
+            --extra-ldflags="--sysroot=$SYSROOT -Wl,-rpath,\$ORIGIN/../lib"
+
+          make -j"$(nproc)"
+          make install
+
+      - name: Build SDL3 (aarch64, using RockNIX sysroot)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SYSROOT="$GITHUB_WORKSPACE/sysroot/rootfs"
+          TP="$GITHUB_WORKSPACE/third_party"
+
+          SDL="SDL3-3.2.24"
+          INSTALL="$TP/sdl3/build"
+
+          if [ -f "$INSTALL/lib/libSDL3.so" ] || [ -f "$INSTALL/lib64/libSDL3.so" ]; then
+            echo "SDL3 already built."
+            exit 0
+          fi
+
+          mkdir -p "$TP/sdl3"
+          cd "$TP/sdl3"
+
+          if [ ! -d "$SDL" ]; then
+            curl -L -O "https://libsdl.org/release/$SDL.tar.gz"
+            tar xf "$SDL.tar.gz"
+          fi
+
+          cd "$SDL"
+          mkdir -p build && cd build
+
+          cmake .. -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/rocknix-aarch64.cmake" \
+            -DCMAKE_SYSROOT="$SYSROOT" \
+            -DCMAKE_INSTALL_PREFIX="$INSTALL" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DSDL_STATIC=OFF
+
+          cmake --build . --parallel
+          cmake --install .
+
+      - name: Build 3sx (RockNIX ARM64)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SYSROOT="$GITHUB_WORKSPACE/sysroot/rootfs"
+
+          cmake -S . -B build-linux-arm64 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/rocknix-aarch64.cmake" \
+            -DCMAKE_SYSROOT="$SYSROOT"
+
+          cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
+
+      - name: Package ARM64 build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p dist
+          cp build-linux-arm64/3sx dist/
+          (cd dist && tar -czf ../3sx-rocknix-arm64.tar.gz .)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3sx-rocknix-arm64
+          path: 3sx-rocknix-arm64.tar.gz
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-rocknix-arm64
+          path: build.log
+
+      - name: Verify architecture
+        shell: bash
+        run: |
+          set -euxo pipefail
+          file build-linux-arm64/3sx | grep -q aarch64
