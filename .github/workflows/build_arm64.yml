@@ -68,6 +68,14 @@ jobs:
             libwayland-dev:arm64 libwayland-egl1:arm64 libdecor-0-dev:arm64 \
             wayland-protocols
 
+      - name: Locate iso9660.h (arm64)
+        run: |
+          set -eux
+          dpkg -L libcdio-dev:arm64 | grep -E 'cdio/iso9660\.h' || true
+          find /usr/include -type f -path '*cdio/iso9660.h' -print || true
+          ls -la /usr/include/aarch64-linux-gnu/cdio || true
+          ls -la /usr/include/cdio || true
+
       - name: Prepare third_party folder
         run: |
           set -eux
