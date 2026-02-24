@@ -14,6 +14,9 @@ jobs:
       image: ubuntu:25.04
 
     steps:
+      # ------------------------------------------------------------
+      # Toolchain + Base Setup
+      # ------------------------------------------------------------
       - name: Install toolchain
         run: |
           apt-get update
@@ -40,21 +43,30 @@ jobs:
             autoconf automake libtool gettext texinfo \
             clang zip file qemu-user-static
 
+      # ------------------------------------------------------------
+      # Checkout Repo
+      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
+      # ------------------------------------------------------------
+      # Cache third_party builds
+      # ------------------------------------------------------------
       - name: Cache dependencies
         uses: actions/cache@v4
         with:
           path: third_party
           key: Linux-arm64-cross-${{ hashFiles('cmake/**', '.github/workflows/**') }}
 
+      # ------------------------------------------------------------
+      # ARM64 system deps
+      # ------------------------------------------------------------
       - name: Install ARM64 build dependencies
         run: |
           apt-get install -y \
-            libcdio-dev:arm64 \
+            libcdio-dev:arm64 libcdio-cdda-dev:arm64 \
             libasound2-dev:arm64 libpulse-dev:arm64 \
             libx11-dev:arm64 libxext-dev:arm64 libxrandr-dev:arm64 \
             libxcursor-dev:arm64 libxfixes-dev:arm64 libxi-dev:arm64 \
@@ -67,15 +79,19 @@ jobs:
             libwayland-dev:arm64 libwayland-egl1:arm64 libdecor-0-dev:arm64 \
             wayland-protocols
 
-      - name: Debug workspace + create third_party
+      # ------------------------------------------------------------
+      # Ensure third_party exists (repo may not include it)
+      # ------------------------------------------------------------
+      - name: Prepare third_party folder
         run: |
           set -eux
-          echo "PWD=$(pwd)"
-          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
-          ls -la
           mkdir -p "$GITHUB_WORKSPACE/third_party"
+          ls -la
           ls -la "$GITHUB_WORKSPACE/third_party"
 
+      # ------------------------------------------------------------
+      # Build FFmpeg
+      # ------------------------------------------------------------
       - name: Build FFmpeg (aarch64)
         run: |
           set -eux
@@ -114,6 +130,9 @@ jobs:
           make -j"$(nproc)"
           make install
 
+      # ------------------------------------------------------------
+      # Build SDL3
+      # ------------------------------------------------------------
       - name: Build SDL3 (aarch64)
         run: |
           set -eux
@@ -137,7 +156,8 @@ jobs:
           cd "$SDL"
           mkdir -p build && cd build
 
-          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
+          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
 
           cmake .. -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
@@ -148,15 +168,31 @@ jobs:
           cmake --build . --parallel
           cmake --install .
 
+      # ------------------------------------------------------------
+      # Build 3sx
+      # ------------------------------------------------------------
       - name: Build 3sx (Linux ARM64)
         run: |
           set -o pipefail
+
+          # Make pkg-config find ARM64 .pc files (multiarch)
+          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+
+          # Helpful debug while you’re stabilizing:
+          ls -la /usr/lib/aarch64-linux-gnu/pkgconfig || true
+          pkg-config --list-all | grep -E 'cdio|iso9660' || true
+
           cmake -S . -B build-linux-arm64 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake"
+
           cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
         shell: bash
 
+      # ------------------------------------------------------------
+      # Package
+      # ------------------------------------------------------------
       - name: Package ARM64 build
         run: |
           mkdir -p dist
