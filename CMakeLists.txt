@@ -11,9 +11,6 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# ISO extraction support (libcdio) - OFF by default for clean cross builds
-option(ENABLE_ISO_SUPPORT "Enable ISO9660 reading via libcdio" OFF)
-
 add_subdirectory(GekkoNet)
 
 # ======================================
@@ -38,11 +35,6 @@ file(GLOB_RECURSE ZLIB_SRC zlib/*.c)
 add_executable(3sx MACOSX_BUNDLE
     ${GAME_SRC} ${ZLIB_SRC}
 )
-
-# Enable the C define ONLY after target exists
-if(ENABLE_ISO_SUPPORT)
-    target_compile_definitions(3sx PRIVATE ENABLE_ISO_SUPPORT)
-endif()
 
 # ======================================
 # Compiler and linker flags
@@ -90,7 +82,10 @@ endif()
 
 target_compile_options(3sx PRIVATE
     -Wall
+    -Werror
+
     -fno-strict-aliasing
+
     ${DISABLED_WARNINGS}
 )
 
@@ -121,52 +116,20 @@ endif()
 # ======================================
 
 set(THIRD_PARTY_DIR "${CMAKE_SOURCE_DIR}/third_party")
-
-# Allow overriding roots (Flatpak uses /app)
-if(NOT DEFINED FFMPEG_ROOT)
-    set(FFMPEG_ROOT "${THIRD_PARTY_DIR}/ffmpeg/build")
-endif()
-
-if(NOT DEFINED SDL3_ROOT)
-    set(SDL3_ROOT "${THIRD_PARTY_DIR}/sdl3/build")
-endif()
+set(FFMPEG_ROOT "${THIRD_PARTY_DIR}/ffmpeg/build")
+set(SDL3_ROOT "${THIRD_PARTY_DIR}/sdl3/build")
+set(LIBCDIO_ROOT "${THIRD_PARTY_DIR}/libcdio/build")
 
 include_directories(
     ${FFMPEG_ROOT}/include
     ${SDL3_ROOT}/include
+    ${LIBCDIO_ROOT}/include
 )
 
-# ---- libcdio handling (ONLY when ISO support enabled) ----
-if(ENABLE_ISO_SUPPORT)
-    if(UNIX AND NOT APPLE)
-        set(LOCAL_CDIO_ROOT "${CMAKE_SOURCE_DIR}/third_party/libcdio/build")
-
-        if(EXISTS "${LOCAL_CDIO_ROOT}/include/cdio/iso9660.h")
-            message(STATUS "Using bundled libcdio from: ${LOCAL_CDIO_ROOT}")
-            target_include_directories(3sx PRIVATE "${LOCAL_CDIO_ROOT}/include")
-
-            if(EXISTS "${LOCAL_CDIO_ROOT}/lib/libcdio.a")
-                target_link_libraries(3sx PRIVATE "${LOCAL_CDIO_ROOT}/lib/libcdio.a")
-            endif()
-            if(EXISTS "${LOCAL_CDIO_ROOT}/lib/libiso9660.a")
-                target_link_libraries(3sx PRIVATE "${LOCAL_CDIO_ROOT}/lib/libiso9660.a")
-            endif()
-        else()
-            find_package(PkgConfig REQUIRED)
-            pkg_check_modules(CDIO REQUIRED libcdio)
-            target_include_directories(3sx PRIVATE ${CDIO_INCLUDE_DIRS})
-            target_link_libraries(3sx PRIVATE ${CDIO_LIBRARIES})
-        endif()
-    else()
-        # Apple/Windows vendored libs
-        set(LIBCDIO_ROOT "${THIRD_PARTY_DIR}/libcdio/build")
-        include_directories(${LIBCDIO_ROOT}/include)
-        target_link_libraries(3sx PRIVATE
-            "${LIBCDIO_ROOT}/lib/libiso9660.a"
-            "${LIBCDIO_ROOT}/lib/libcdio.a"
-        )
-    endif()
-endif()
+target_link_libraries(3sx PRIVATE
+    "${LIBCDIO_ROOT}/lib/libiso9660.a"
+    "${LIBCDIO_ROOT}/lib/libcdio.a"
+)
 
 if(APPLE)
     target_link_libraries(3sx PRIVATE
@@ -185,7 +148,7 @@ elseif(WIN32)
         ${FFMPEG_ROOT}/lib/libswresample.dll.a
         ${SDL3_ROOT}/lib/libSDL3.dll.a
         iconv
-        dbghelp
+		dbghelp
     )
     target_link_options(3sx PRIVATE
         --for-linker
@@ -230,21 +193,22 @@ if(APPLE)
     )
 elseif(WIN32)
     install(TARGETS 3sx
-        RUNTIME_DEPENDENCY_SET deps
+		RUNTIME_DEPENDENCY_SET deps
         RUNTIME DESTINATION bin
     )
 
     execute_process(COMMAND cygpath -m /mingw64/bin
-        OUTPUT_VARIABLE binPath
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-
-    install(RUNTIME_DEPENDENCY_SET deps
-        DIRECTORIES ${binPath} "${FFMPEG_ROOT}/bin" "${SDL3_ROOT}/bin"
-        PRE_EXCLUDE_REGEXES "^api"
-        POST_EXCLUDE_REGEXES ".*system32/.*\\.dll"
-        DESTINATION bin
-    )
+		OUTPUT_VARIABLE binPath
+		OUTPUT_STRIP_TRAILING_WHITESPACE
+	)
+	
+	# automatically copies all the dependent DLLS, and ignores the system ones because they aren't necessary
+	install(RUNTIME_DEPENDENCY_SET deps
+		DIRECTORIES ${binPath} "${FFMPEG_ROOT}/bin" "${SDL3_ROOT}/bin"
+		PRE_EXCLUDE_REGEXES "^api"
+		POST_EXCLUDE_REGEXES ".*system32/.*\\.dll"
+		DESTINATION bin
+	)
 
     install(FILES
         "build/3sx.pdb"
