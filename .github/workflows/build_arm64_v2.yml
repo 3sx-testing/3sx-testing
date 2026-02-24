@@ -26,14 +26,12 @@ jobs:
 
           dpkg --add-architecture arm64
 
-          # Pin existing DEB822 sources to amd64-only
           for f in /etc/apt/sources.list.d/*.sources; do
             if [ -f "$f" ] && ! grep -q 'Architectures:' "$f"; then
               sed -i '/^Types:/a Architectures: amd64' "$f"
             fi
           done
 
-          # Add arm64 ports sources
           printf '%s\n' \
             'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports plucky main restricted universe multiverse' \
             'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports plucky-updates main restricted universe multiverse' \
@@ -88,27 +86,28 @@ jobs:
 
           if [ -f "$PREFIX/include/cdio/iso9660.h" ] && [ -f "$PREFIX/lib/libcdio.a" ]; then
             echo "libcdio already built."
-          else
-            rm -rf "$SRC"
-            mkdir -p "$SRC"
-            cd "$SRC"
-
-            curl -L --retry 5 --retry-delay 2 \
-              -o "libcdio-${VER}.tar.bz2" \
-              "https://github.com/libcdio/libcdio/releases/download/${VER}/libcdio-${VER}.tar.bz2"
-
-            tar xf "libcdio-${VER}.tar.bz2"
-            cd "libcdio-${VER}"
-
-            ./configure \
-              --host=aarch64-linux-gnu \
-              --prefix="$PREFIX" \
-              --disable-shared \
-              --enable-static
-
-            make -j"$(nproc)"
-            make install
+            exit 0
           fi
+
+          rm -rf "$SRC"
+          mkdir -p "$SRC"
+          cd "$SRC"
+
+          curl -L --retry 5 --retry-delay 2 \
+            -o "libcdio-${VER}.tar.bz2" \
+            "https://github.com/libcdio/libcdio/releases/download/${VER}/libcdio-${VER}.tar.bz2"
+
+          tar xf "libcdio-${VER}.tar.bz2"
+          cd "libcdio-${VER}"
+
+          ./configure \
+            --host=aarch64-linux-gnu \
+            --prefix="$PREFIX" \
+            --disable-shared \
+            --enable-static
+
+          make -j"$(nproc)"
+          make install
 
           test -f "$PREFIX/include/cdio/iso9660.h"
           test -f "$PREFIX/lib/libcdio.a"
@@ -121,55 +120,44 @@ jobs:
           PCDIR="$PREFIX/lib/pkgconfig"
           mkdir -p "$PCDIR"
 
-          cat > "$PCDIR/libcdio.pc" <<EOF
-prefix=$PREFIX
-exec_prefix=\${prefix}
-libdir=\${prefix}/lib
-includedir=\${prefix}/include
+          printf '%s\n' \
+            "prefix=$PREFIX" \
+            "exec_prefix=\${prefix}" \
+            "libdir=\${prefix}/lib" \
+            "includedir=\${prefix}/include" \
+            "" \
+            "Name: libcdio" \
+            "Description: Compact Disc Input and Control Library" \
+            "Version: 2.2.0" \
+            "Libs: -L\${libdir} -lcdio -liso9660" \
+            "Cflags: -I\${includedir}" \
+            > "$PCDIR/libcdio.pc"
 
-Name: libcdio
-Description: Compact Disc Input and Control Library
-Version: 2.2.0
-Libs: -L\${libdir} -lcdio -liso9660
-Cflags: -I\${includedir}
-EOF
-
-          echo "== libcdio pkgconfig dir =="
           ls -la "$PCDIR"
-          echo "== libcdio.pc =="
           cat "$PCDIR/libcdio.pc"
 
-      - name: Build FFmpeg (aarch64)
+      - name: Build 3sx (Linux ARM64) - forced pkg-config
         shell: bash
         run: |
           set -euxo pipefail
-          TP="$GITHUB_WORKSPACE/third_party"
-          INSTALL="$TP/ffmpeg/build"
 
-          if [ -f "$INSTALL/lib/libavcodec.so" ]; then
-            echo "FFmpeg already built."
-            exit 0
-          fi
+          LIBCDIO_PC="$GITHUB_WORKSPACE/third_party/libcdio/build/lib/pkgconfig"
 
-          cd "$TP"
-          curl -L -O https://ffmpeg.org/releases/ffmpeg-8.0.tar.xz
-          tar xf ffmpeg-8.0.tar.xz
-          cd ffmpeg-8.0
+          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+          PKG_CONFIG_LIBDIR= \
+          pkg-config --modversion libcdio
 
-          ./configure \
-            --prefix="$INSTALL" \
-            --arch=aarch64 \
-            --target-os=linux \
-            --enable-cross-compile \
-            --cross-prefix=aarch64-linux-gnu- \
-            --disable-x86asm \
-            --disable-static --enable-shared \
-            --disable-all \
-            --enable-avcodec --enable-avformat --enable-avutil --enable-swresample \
-            --enable-decoder=adpcm_adx --enable-parser=adx --enable-muxer=adx
+          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+          PKG_CONFIG_LIBDIR= \
+          pkg-config --cflags --libs libcdio
 
-          make -j"$(nproc)"
-          make install
+          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+          PKG_CONFIG_LIBDIR= \
+          cmake -S . -B build-linux-arm64 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake"
+
+          cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
 
       - name: Build SDL3 (aarch64)
         shell: bash
