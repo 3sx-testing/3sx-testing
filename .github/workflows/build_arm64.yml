@@ -66,6 +66,7 @@ jobs:
       - name: Install ARM64 build dependencies
         run: |
           apt-get install -y \
+            libcdio-dev:arm64 \
             libasound2-dev:arm64 libpulse-dev:arm64 \
             libx11-dev:arm64 libxext-dev:arm64 libxrandr-dev:arm64 \
             libxcursor-dev:arm64 libxfixes-dev:arm64 libxi-dev:arm64 \
@@ -77,39 +78,6 @@ jobs:
             libpipewire-0.3-dev:arm64 \
             libwayland-dev:arm64 libwayland-egl1:arm64 libdecor-0-dev:arm64 \
             wayland-protocols
-
-      # ------------------------------------------------------------
-      # Build libcdio (FIXES YOUR ERROR)
-      # ------------------------------------------------------------
-      - name: Build libcdio (aarch64)
-        run: |
-          set -eux
-
-          PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
-
-          if [ -f "$PREFIX/lib/libiso9660.a" ]; then
-            echo "libcdio already built."
-            exit 0
-          fi
-
-          test -d third_party/libcdio || (echo "libcdio folder missing!" && exit 1)
-          cd third_party/libcdio
-
-          if [ -f "./autogen.sh" ]; then ./autogen.sh; fi
-          if [ -f "./bootstrap" ]; then ./bootstrap; fi
-
-          ./configure \
-            --host=aarch64-linux-gnu \
-            --build=x86_64-linux-gnu \
-            --prefix="$PREFIX" \
-            --enable-static \
-            --disable-shared \
-            --disable-nls
-
-          make -j$(nproc)
-          make install
-
-          test -f "$PREFIX/lib/libiso9660.a"
 
       # ------------------------------------------------------------
       # Build FFmpeg
