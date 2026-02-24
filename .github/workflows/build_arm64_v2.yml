@@ -1,0 +1,251 @@
+name: Build (Linux ARM64 Cross-Compile)
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:25.04
+
+    steps:
+      - name: Install toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          apt-get update
+          apt-get install -y git curl xz-utils ca-certificates tar \
+            cmake ninja-build make pkg-config \
+            autoconf automake libtool gettext texinfo \
+            crossbuild-essential-arm64 \
+            clang zip file
+
+          dpkg --add-architecture arm64
+
+          # Pin existing DEB822 sources to amd64-only
+          for f in /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$f" ] && ! grep -q 'Architectures:' "$f"; then
+              sed -i '/^Types:/a Architectures: amd64' "$f"
+            fi
+          done
+
+          # Add arm64 ports sources
+          printf '%s\n' \
+            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports plucky main restricted universe multiverse' \
+            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports plucky-updates main restricted universe multiverse' \
+            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports plucky-security main restricted universe multiverse' \
+            > /etc/apt/sources.list.d/arm64-ports.list
+
+          apt-get update
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache third_party
+        uses: actions/cache@v4
+        with:
+          path: third_party
+          key: Linux-arm64-cross-${{ hashFiles('build-deps.sh', 'CMakeLists.txt', 'cmake/**', '.github/workflows/**') }}
+
+      - name: Install ARM64 dev libs for SDL3
+        shell: bash
+        run: |
+          set -euxo pipefail
+          apt-get update
+          apt-get install -y \
+            libasound2-dev:arm64 libpulse-dev:arm64 \
+            libx11-dev:arm64 libxext-dev:arm64 libxrandr-dev:arm64 \
+            libxcursor-dev:arm64 libxfixes-dev:arm64 libxi-dev:arm64 \
+            libxrender-dev:arm64 libxinerama-dev:arm64 libxtst-dev:arm64 \
+            libxss-dev:arm64 libxkbcommon-dev:arm64 libxkbcommon-x11-dev:arm64 \
+            libdrm-dev:arm64 libgbm-dev:arm64 \
+            libgl1-mesa-dev:arm64 libgles2-mesa-dev:arm64 libegl1-mesa-dev:arm64 \
+            libdbus-1-dev:arm64 libudev-dev:arm64 \
+            libpipewire-0.3-dev:arm64 \
+            libwayland-dev:arm64 libwayland-egl1:arm64 libdecor-0-dev:arm64 \
+            wayland-protocols
+
+      - name: Prepare third_party folder
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/third_party"
+
+      - name: Build libcdio (aarch64)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TP="$GITHUB_WORKSPACE/third_party"
+          PREFIX="$TP/libcdio/build"
+          SRC="$TP/libcdio-src"
+          VER="2.2.0"
+
+          if [ -f "$PREFIX/include/cdio/iso9660.h" ] && [ -f "$PREFIX/lib/libcdio.a" ]; then
+            echo "libcdio already built."
+          else
+            rm -rf "$SRC"
+            mkdir -p "$SRC"
+            cd "$SRC"
+
+            curl -L --retry 5 --retry-delay 2 \
+              -o "libcdio-${VER}.tar.bz2" \
+              "https://github.com/libcdio/libcdio/releases/download/${VER}/libcdio-${VER}.tar.bz2"
+
+            tar xf "libcdio-${VER}.tar.bz2"
+            cd "libcdio-${VER}"
+
+            ./configure \
+              --host=aarch64-linux-gnu \
+              --prefix="$PREFIX" \
+              --disable-shared \
+              --enable-static
+
+            make -j"$(nproc)"
+            make install
+          fi
+
+          test -f "$PREFIX/include/cdio/iso9660.h"
+          test -f "$PREFIX/lib/libcdio.a"
+
+      - name: Create libcdio.pc for pkg-config
+        shell: bash
+        run: |
+          set -euxo pipefail
+          PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
+          PCDIR="$PREFIX/lib/pkgconfig"
+          mkdir -p "$PCDIR"
+
+          cat > "$PCDIR/libcdio.pc" <<EOF
+prefix=$PREFIX
+exec_prefix=\${prefix}
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: libcdio
+Description: Compact Disc Input and Control Library
+Version: 2.2.0
+Libs: -L\${libdir} -lcdio -liso9660
+Cflags: -I\${includedir}
+EOF
+
+          echo "== libcdio pkgconfig dir =="
+          ls -la "$PCDIR"
+          echo "== libcdio.pc =="
+          cat "$PCDIR/libcdio.pc"
+
+      - name: Build FFmpeg (aarch64)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TP="$GITHUB_WORKSPACE/third_party"
+          INSTALL="$TP/ffmpeg/build"
+
+          if [ -f "$INSTALL/lib/libavcodec.so" ]; then
+            echo "FFmpeg already built."
+            exit 0
+          fi
+
+          cd "$TP"
+          curl -L -O https://ffmpeg.org/releases/ffmpeg-8.0.tar.xz
+          tar xf ffmpeg-8.0.tar.xz
+          cd ffmpeg-8.0
+
+          ./configure \
+            --prefix="$INSTALL" \
+            --arch=aarch64 \
+            --target-os=linux \
+            --enable-cross-compile \
+            --cross-prefix=aarch64-linux-gnu- \
+            --disable-x86asm \
+            --disable-static --enable-shared \
+            --disable-all \
+            --enable-avcodec --enable-avformat --enable-avutil --enable-swresample \
+            --enable-decoder=adpcm_adx --enable-parser=adx --enable-muxer=adx
+
+          make -j"$(nproc)"
+          make install
+
+      - name: Build SDL3 (aarch64)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TP="$GITHUB_WORKSPACE/third_party"
+          INSTALL="$TP/sdl3/build"
+          SDLVER="SDL3-3.2.24"
+
+          if [ -f "$INSTALL/lib/libSDL3.so" ] || [ -f "$INSTALL/lib64/libSDL3.so" ]; then
+            echo "SDL3 already built."
+            exit 0
+          fi
+
+          cd "$TP"
+          curl -L -O "https://libsdl.org/release/${SDLVER}.tar.gz"
+          tar xf "${SDLVER}.tar.gz"
+          cd "${SDLVER}"
+
+          cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
+            -DCMAKE_INSTALL_PREFIX="$INSTALL" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DSDL_STATIC=OFF
+
+          cmake --build build --parallel
+          cmake --install build
+
+      - name: Build 3sx (Linux ARM64) - forced pkg-config
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          LIBCDIO_PC="$GITHUB_WORKSPACE/third_party/libcdio/build/lib/pkgconfig"
+
+          echo "== sanity: pkg-config sees libcdio? =="
+          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+          PKG_CONFIG_LIBDIR= \
+          pkg-config --modversion libcdio
+
+          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+          PKG_CONFIG_LIBDIR= \
+          pkg-config --cflags --libs libcdio
+
+          echo "== configuring cmake =="
+          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+          PKG_CONFIG_LIBDIR= \
+          cmake -S . -B build-linux-arm64 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake"
+
+          cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-linux-arm64
+          path: build.log
+
+      - name: Package ARM64 build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p dist
+          cp build-linux-arm64/3sx dist/
+          (cd dist && tar -czf ../3sx-linux-arm64.tar.gz .)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3sx-linux-arm64
+          path: 3sx-linux-arm64.tar.gz
+
+      - name: Verify architecture
+        shell: bash
+        run: |
+          set -euxo pipefail
+          file build-linux-arm64/3sx | grep -q aarch64
