@@ -120,6 +120,7 @@ jobs:
 
           test -f "$PREFIX/include/cdio/iso9660.h"
           test -f "$PREFIX/lib/libcdio.a"
+          test -f "$PREFIX/lib/libiso9660.a"
 
       - name: Create libcdio.pc for pkg-config (local)
         shell: bash
@@ -218,12 +219,13 @@ jobs:
           cmake --build . --parallel
           cmake --install .
 
-      - name: Build 3sx (Linux ARM64) - forced pkg-config for libcdio
+      - name: Build 3sx (Linux ARM64) - forced pkg-config + link path for libcdio
         shell: bash
         run: |
           set -euxo pipefail
 
-          LIBCDIO_PC="$GITHUB_WORKSPACE/third_party/libcdio/build/lib/pkgconfig"
+          LIBCDIO_PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
+          LIBCDIO_PC="$LIBCDIO_PREFIX/lib/pkgconfig"
 
           echo "== sanity: pkg-config sees libcdio? =="
           PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
@@ -234,12 +236,19 @@ jobs:
           PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
           pkg-config --cflags --libs libcdio
 
-          echo "== configuring cmake =="
+          echo "== sanity: libcdio static libs exist? =="
+          ls -la "$LIBCDIO_PREFIX/lib" | head -n 50
+
+          echo "== configuring cmake (force lib search path) =="
           PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
           PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
           cmake -S . -B build-linux-arm64 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake"
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
+            -DCMAKE_PREFIX_PATH="$LIBCDIO_PREFIX" \
+            -DCMAKE_LIBRARY_PATH="$LIBCDIO_PREFIX/lib" \
+            -DCMAKE_INCLUDE_PATH="$LIBCDIO_PREFIX/include" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$LIBCDIO_PREFIX/lib"
 
           cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
 
