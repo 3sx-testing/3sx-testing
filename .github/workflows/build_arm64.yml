@@ -220,10 +220,7 @@ jobs:
           cmake --build . --parallel
           cmake --install .
 
-      # -------------------------
-      # Release build (UNCHANGED)
-      # -------------------------
-      - name: Build 3sx (Linux ARM64 - Release)
+      - name: Build 3sx (Linux ARM64)
         shell: bash
         run: |
           set -euxo pipefail
@@ -234,29 +231,6 @@ jobs:
           PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
           PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
           cmake -S . -B build-linux-arm64 -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
-            -DCMAKE_PREFIX_PATH="$LIBCDIO_PREFIX" \
-            -DCMAKE_LIBRARY_PATH="$LIBCDIO_PREFIX/lib" \
-            -DCMAKE_INCLUDE_PATH="$LIBCDIO_PREFIX/include" \
-            -DCMAKE_EXE_LINKER_FLAGS="-L$LIBCDIO_PREFIX/lib"
-
-          cmake --build build-linux-arm64 --parallel 2>&1 | tee build-release.log
-
-      # -------------------------
-      # Debug build (ADDED)
-      # -------------------------
-      - name: Build 3sx (Linux ARM64 - Debug)
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          LIBCDIO_PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
-          LIBCDIO_PC="$LIBCDIO_PREFIX/lib/pkgconfig"
-
-          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-          PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
-          cmake -S . -B build-linux-arm64-debug -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
             -DCMAKE_PREFIX_PATH="$LIBCDIO_PREFIX" \
@@ -264,30 +238,25 @@ jobs:
             -DCMAKE_INCLUDE_PATH="$LIBCDIO_PREFIX/include" \
             -DCMAKE_EXE_LINKER_FLAGS="-L$LIBCDIO_PREFIX/lib"
 
-          cmake --build build-linux-arm64-debug --parallel 2>&1 | tee build-debug.log
+          cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
 
-      - name: Upload build logs
+      - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs-linux-arm64
-          path: |
-            build-release.log
-            build-debug.log
+          name: build-log-linux-arm64
+          path: build.log
 
-      # -------------------------
-      # Package Release (same libs)
-      # -------------------------
-      - name: Package ARM64 build RockNIX (Release)
+      - name: Package ARM64 build RockNIX
         shell: bash
         run: |
           set -euxo pipefail
 
-          rm -rf dist-release
-          mkdir -p dist-release/bin dist-release/lib
+          rm -rf dist
+          mkdir -p dist/bin dist/lib
 
-          cp build-linux-arm64/3sx dist-release/bin/3sx
-          chmod +x dist-release/bin/3sx
+          cp build-linux-arm64/3sx dist/bin/3sx
+          chmod +x dist/bin/3sx
 
           if [ -d third_party/sdl3/build/lib64 ]; then
             SDL_LIBDIR="third_party/sdl3/build/lib64"
@@ -310,11 +279,11 @@ jobs:
           test -n "$AVUTIL_REAL"
           test -n "$SWR_REAL"
 
-          cp -L "$SDL_REAL"      "dist-release/lib/$(basename "$SDL_REAL")"
-          cp -L "$AVCODEC_REAL"  "dist-release/lib/$(basename "$AVCODEC_REAL")"
-          cp -L "$AVFORMAT_REAL" "dist-release/lib/$(basename "$AVFORMAT_REAL")"
-          cp -L "$AVUTIL_REAL"   "dist-release/lib/$(basename "$AVUTIL_REAL")"
-          cp -L "$SWR_REAL"      "dist-release/lib/$(basename "$SWR_REAL")"
+          cp -L "$SDL_REAL"      "dist/lib/$(basename "$SDL_REAL")"
+          cp -L "$AVCODEC_REAL"  "dist/lib/$(basename "$AVCODEC_REAL")"
+          cp -L "$AVFORMAT_REAL" "dist/lib/$(basename "$AVFORMAT_REAL")"
+          cp -L "$AVUTIL_REAL"   "dist/lib/$(basename "$AVUTIL_REAL")"
+          cp -L "$SWR_REAL"      "dist/lib/$(basename "$SWR_REAL")"
 
           SDL_BASE="$(basename "$SDL_REAL")"
           AVCODEC_BASE="$(basename "$AVCODEC_REAL")"
@@ -322,120 +291,39 @@ jobs:
           AVUTIL_BASE="$(basename "$AVUTIL_REAL")"
           SWR_BASE="$(basename "$SWR_REAL")"
 
-          cp "dist-release/lib/$SDL_BASE"      dist-release/lib/libSDL3.so.0
-          cp "dist-release/lib/$SDL_BASE"      dist-release/lib/libSDL3.so
+          cp "dist/lib/$SDL_BASE"      dist/lib/libSDL3.so.0
+          cp "dist/lib/$SDL_BASE"      dist/lib/libSDL3.so
 
-          cp "dist-release/lib/$AVCODEC_BASE"  dist-release/lib/libavcodec.so.62
-          cp "dist-release/lib/$AVCODEC_BASE"  dist-release/lib/libavcodec.so
+          cp "dist/lib/$AVCODEC_BASE"  dist/lib/libavcodec.so.62
+          cp "dist/lib/$AVCODEC_BASE"  dist/lib/libavcodec.so
 
-          cp "dist-release/lib/$AVFORMAT_BASE" dist-release/lib/libavformat.so.62
-          cp "dist-release/lib/$AVFORMAT_BASE" dist-release/lib/libavformat.so
+          cp "dist/lib/$AVFORMAT_BASE" dist/lib/libavformat.so.62
+          cp "dist/lib/$AVFORMAT_BASE" dist/lib/libavformat.so
 
-          cp "dist-release/lib/$AVUTIL_BASE"   dist-release/lib/libavutil.so.60
-          cp "dist-release/lib/$AVUTIL_BASE"   dist-release/lib/libavutil.so
+          cp "dist/lib/$AVUTIL_BASE"   dist/lib/libavutil.so.60
+          cp "dist/lib/$AVUTIL_BASE"   dist/lib/libavutil.so
 
-          cp "dist-release/lib/$SWR_BASE"      dist-release/lib/libswresample.so.6
-          cp "dist-release/lib/$SWR_BASE"      dist-release/lib/libswresample.so
+          cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so.6
+          cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so
 
-          cat > dist-release/3sx.sh <<'SH'
-#!/bin/sh
-PORTDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-export LD_LIBRARY_PATH="$PORTDIR/lib:$LD_LIBRARY_PATH"
-export SDL_RENDER_DRIVER=opengles2
-exec "$PORTDIR/bin/3sx" "$@"
-SH
-          chmod +x dist-release/3sx.sh
+          cat > dist/3sx.sh <<'SH'
+          #!/bin/sh
+          PORTDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$PORTDIR/lib:$LD_LIBRARY_PATH"
+          exec "$PORTDIR/bin/3sx" "$@"
+          SH
+          chmod +x dist/3sx.sh
 
-          tar -C dist-release -czf 3sx-linux-arm64-release.tar.gz .
+          tar -C dist -czf 3sx-linux-arm64.tar.gz .
 
-      - name: Upload artifact (Release)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 3sx-linux-arm64-release
-          path: 3sx-linux-arm64-release.tar.gz
-
-      # -------------------------
-      # Package Debug (same libs)
-      # -------------------------
-      - name: Package ARM64 build RockNIX (Debug)
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          rm -rf dist-debug
-          mkdir -p dist-debug/bin dist-debug/lib
-
-          cp build-linux-arm64-debug/3sx dist-debug/bin/3sx
-          chmod +x dist-debug/bin/3sx
-
-          if [ -d third_party/sdl3/build/lib64 ]; then
-            SDL_LIBDIR="third_party/sdl3/build/lib64"
-          else
-            SDL_LIBDIR="third_party/sdl3/build/lib"
-          fi
-          FF_LIBDIR="third_party/ffmpeg/build/lib"
-
-          pick_latest() { ls -1 $1 2>/dev/null | sort -V | tail -n 1; }
-
-          SDL_REAL="$(pick_latest "$SDL_LIBDIR/libSDL3.so.0.*")"
-          AVCODEC_REAL="$(pick_latest "$FF_LIBDIR/libavcodec.so.62.*")"
-          AVFORMAT_REAL="$(pick_latest "$FF_LIBDIR/libavformat.so.62.*")"
-          AVUTIL_REAL="$(pick_latest "$FF_LIBDIR/libavutil.so.60.*")"
-          SWR_REAL="$(pick_latest "$FF_LIBDIR/libswresample.so.6.*")"
-
-          test -n "$SDL_REAL"
-          test -n "$AVCODEC_REAL"
-          test -n "$AVFORMAT_REAL"
-          test -n "$AVUTIL_REAL"
-          test -n "$SWR_REAL"
-
-          cp -L "$SDL_REAL"      "dist-debug/lib/$(basename "$SDL_REAL")"
-          cp -L "$AVCODEC_REAL"  "dist-debug/lib/$(basename "$AVCODEC_REAL")"
-          cp -L "$AVFORMAT_REAL" "dist-debug/lib/$(basename "$AVFORMAT_REAL")"
-          cp -L "$AVUTIL_REAL"   "dist-debug/lib/$(basename "$AVUTIL_REAL")"
-          cp -L "$SWR_REAL"      "dist-debug/lib/$(basename "$SWR_REAL")"
-
-          SDL_BASE="$(basename "$SDL_REAL")"
-          AVCODEC_BASE="$(basename "$AVCODEC_REAL")"
-          AVFORMAT_BASE="$(basename "$AVFORMAT_REAL")"
-          AVUTIL_BASE="$(basename "$AVUTIL_REAL")"
-          SWR_BASE="$(basename "$SWR_REAL")"
-
-          cp "dist-debug/lib/$SDL_BASE"      dist-debug/lib/libSDL3.so.0
-          cp "dist-debug/lib/$SDL_BASE"      dist-debug/lib/libSDL3.so
-
-          cp "dist-debug/lib/$AVCODEC_BASE"  dist-debug/lib/libavcodec.so.62
-          cp "dist-debug/lib/$AVCODEC_BASE"  dist-debug/lib/libavcodec.so
-
-          cp "dist-debug/lib/$AVFORMAT_BASE" dist-debug/lib/libavformat.so.62
-          cp "dist-debug/lib/$AVFORMAT_BASE" dist-debug/lib/libavformat.so
-
-          cp "dist-debug/lib/$AVUTIL_BASE"   dist-debug/lib/libavutil.so.60
-          cp "dist-debug/lib/$AVUTIL_BASE"   dist-debug/lib/libavutil.so
-
-          cp "dist-debug/lib/$SWR_BASE"      dist-debug/lib/libswresample.so.6
-          cp "dist-debug/lib/$SWR_BASE"      dist-debug/lib/libswresample.so
-
-          cat > dist-debug/3sx.sh <<'SH'
-#!/bin/sh
-PORTDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-export LD_LIBRARY_PATH="$PORTDIR/lib:$LD_LIBRARY_PATH"
-export SDL_RENDER_DRIVER=opengles2
-exec "$PORTDIR/bin/3sx" "$@"
-SH
-          chmod +x dist-debug/3sx.sh
-
-          tar -C dist-debug -czf 3sx-linux-arm64-debug.tar.gz .
-
-      - name: Upload artifact (Debug)
-        uses: actions/upload-artifact@v4
-        with:
-          name: 3sx-linux-arm64-debug
-          path: 3sx-linux-arm64-debug.tar.gz
+          name: 3sx-linux-arm64
+          path: 3sx-linux-arm64.tar.gz
 
       - name: Verify architecture
         shell: bash
         run: |
           set -euxo pipefail
           file build-linux-arm64/3sx | grep -q aarch64
-          file build-linux-arm64-debug/3sx | grep -q aarch64
