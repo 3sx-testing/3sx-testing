@@ -211,3 +211,100 @@ Cleaner enum safety in your code
 
 
 ===============
+
+What Changed in sf33rd/AcrSDK/ps2/flps2etc.c
+1) Added a Linux-only strupr() implementation (non-PS2, non-Windows)
+✅ New
+#if !defined(TARGET_PS2) && !defined(_WIN32)
+#include <ctype.h>
+
+s8* strupr(s8* s) {
+    s8* p = s;
+
+    while (*p) {
+        *p = toupper((u8)*p);
+        p++;
+    }
+
+    return s;
+}
+#endif
+Why
+
+strupr() exists on some platforms (not standard C), but not guaranteed on Linux.
+
+This file uses strupr(p); to uppercase filenames.
+
+So you provided a fallback implementation only for Linux builds.
+
+✅ Behavior is the same: it uppercases the path tail before adding ;1.
+
+2) read() / write() return values are now consumed (avoids warnings-as-errors)
+❌ Original
+read(fd, buf, len);
+write(fd, buf, len);
+write(fd, buf, (s32)len);
+✅ New
+{
+    ssize_t r = read(fd, buf, (size_t)len);
+    (void)r;
+}
+...
+{
+    ssize_t w = write(fd, buf, (size_t)len);
+    (void)w;
+}
+Why
+
+On modern GCC/glibc, read() and write() can be marked warn_unused_result.
+If your build treats warnings as errors (-Werror), this will fail the build.
+
+✅ Runtime behavior unchanged. You’re just explicitly acknowledging the return value.
+
+3) Fixed open() usage when using O_CREAT (Linux requires a mode argument)
+❌ Original (BUGGY on Linux/glibc)
+open(temp, O_WRONLY | O_CREAT | O_TRUNC)
+✅ New
+open(temp, O_WRONLY | O_CREAT | O_TRUNC, 0644)
+Why
+
+On POSIX/Linux:
+
+If O_CREAT is set, open() must receive a 3rd argument: file permissions mode.
+
+Without it, the call is undefined / wrong signature, and can compile but behave badly.
+
+✅ This is a correctness fix for Linux builds.
+
+4) Added comments / clarified behavior (no logic change)
+
+Example:
+
+// Keep original behavior (open existing file). If you ever change this to O_CREAT,
+// remember to add the 3rd "mode" argument (e.g. 0644).
+
+This is documentation only.
+
+5) fatal_error("Unhandled path...") still stops the program (unchanged)
+
+You still have:
+
+fatal_error("Unhandled path: %s", filename);
+
+So these file functions are still “PS2 CDROM-path-only stubs” unless that fatal is removed/ifdef’d elsewhere. That part did not change.
+
+📌 Suggested README Snippet (copy/paste)
+
+Put this in your docs/rocknix-rk3566.md or BUILDING.md:
+
+Linux portability fix — flps2etc.c
+
+sf33rd/AcrSDK/ps2/flps2etc.c required minor Linux compatibility fixes:
+
+Added a Linux-only strupr() fallback (not standard C; missing on many Linux toolchains).
+
+Consumed read()/write() return values to avoid warn_unused_result failures when building with -Werror.
+
+Fixed open() calls using O_CREAT to pass the required 3rd argument (0644) on glibc/POSIX.
+
+That’s the clean “professional” explanation.
