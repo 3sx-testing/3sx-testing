@@ -129,7 +129,6 @@ jobs:
           PCDIR="$PREFIX/lib/pkgconfig"
           mkdir -p "$PCDIR"
 
-          # IMPORTANT: static link order matters: libiso9660 depends on libcdio
           printf '%s\n' \
             "prefix=$PREFIX" \
             "exec_prefix=\${prefix}" \
@@ -218,7 +217,7 @@ jobs:
           cmake --build . --parallel
           cmake --install .
 
-      - name: Build 3sx (Linux ARM64) - forced pkg-config + link path for libcdio
+      - name: Build 3sx (Linux ARM64)
         shell: bash
         run: |
           set -euxo pipefail
@@ -226,19 +225,6 @@ jobs:
           LIBCDIO_PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
           LIBCDIO_PC="$LIBCDIO_PREFIX/lib/pkgconfig"
 
-          echo "== sanity: pkg-config sees libcdio? =="
-          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-          PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
-          pkg-config --modversion libcdio
-
-          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-          PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
-          pkg-config --cflags --libs libcdio
-
-          echo "== sanity: libcdio static libs exist? =="
-          ls -la "$LIBCDIO_PREFIX/lib" | head -n 80
-
-          echo "== configuring cmake (force lib search path) =="
           PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
           PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
           cmake -S . -B build-linux-arm64 -G Ninja \
@@ -258,24 +244,17 @@ jobs:
           name: build-log-linux-arm64
           path: build.log
 
-      - name: Package ARM64 build (RockNIX layout: 3sx.sh + bin/ + lib/ no symlinks)
+      - name: Package ARM64 build RockNIX
         shell: bash
         run: |
           set -euxo pipefail
 
-          # Create:
-          #   dist/
-          #     3sx.sh
-          #     bin/3sx
-          #     lib/<real files, duplicated names>
           rm -rf dist
           mkdir -p dist/bin dist/lib
 
-          # Put binary in bin/
           cp build-linux-arm64/3sx dist/bin/3sx
           chmod +x dist/bin/3sx
 
-          # Resolve SDL3 lib dir (lib or lib64)
           if [ -d third_party/sdl3/build/lib64 ]; then
             SDL_LIBDIR="third_party/sdl3/build/lib64"
           else
@@ -283,14 +262,8 @@ jobs:
           fi
           FF_LIBDIR="third_party/ffmpeg/build/lib"
 
-          # Helper: pick newest/highest version by sort -V (works with x.y.z)
-          pick_latest() {
-            # usage: pick_latest "globpattern"
-            # returns a single path
-            ls -1 $1 2>/dev/null | sort -V | tail -n 1
-          }
+          pick_latest() { ls -1 $1 2>/dev/null | sort -V | tail -n 1; }
 
-          # Find the "real" versioned libs
           SDL_REAL="$(pick_latest "$SDL_LIBDIR/libSDL3.so.0.*")"
           AVCODEC_REAL="$(pick_latest "$FF_LIBDIR/libavcodec.so.62.*")"
           AVFORMAT_REAL="$(pick_latest "$FF_LIBDIR/libavformat.so.62.*")"
@@ -303,43 +276,33 @@ jobs:
           test -n "$AVUTIL_REAL"
           test -n "$SWR_REAL"
 
-          echo "== detected libs =="
-          echo "SDL_REAL=$SDL_REAL"
-          echo "AVCODEC_REAL=$AVCODEC_REAL"
-          echo "AVFORMAT_REAL=$AVFORMAT_REAL"
-          echo "AVUTIL_REAL=$AVUTIL_REAL"
-          echo "SWR_REAL=$SWR_REAL"
-
-          # Copy the real versioned files (follow symlinks if any)
           cp -L "$SDL_REAL"      "dist/lib/$(basename "$SDL_REAL")"
           cp -L "$AVCODEC_REAL"  "dist/lib/$(basename "$AVCODEC_REAL")"
           cp -L "$AVFORMAT_REAL" "dist/lib/$(basename "$AVFORMAT_REAL")"
           cp -L "$AVUTIL_REAL"   "dist/lib/$(basename "$AVUTIL_REAL")"
           cp -L "$SWR_REAL"      "dist/lib/$(basename "$SWR_REAL")"
 
-          # Duplicate/rename (NO symlinks) to match the exact names you want
           SDL_BASE="$(basename "$SDL_REAL")"
           AVCODEC_BASE="$(basename "$AVCODEC_REAL")"
           AVFORMAT_BASE="$(basename "$AVFORMAT_REAL")"
           AVUTIL_BASE="$(basename "$AVUTIL_REAL")"
           SWR_BASE="$(basename "$SWR_REAL")"
 
-          cp "dist/lib/$SDL_BASE"     dist/lib/libSDL3.so.0
-          cp "dist/lib/$SDL_BASE"     dist/lib/libSDL3.so
+          cp "dist/lib/$SDL_BASE"      dist/lib/libSDL3.so.0
+          cp "dist/lib/$SDL_BASE"      dist/lib/libSDL3.so
 
-          cp "dist/lib/$AVCODEC_BASE" dist/lib/libavcodec.so.62
-          cp "dist/lib/$AVCODEC_BASE" dist/lib/libavcodec.so
+          cp "dist/lib/$AVCODEC_BASE"  dist/lib/libavcodec.so.62
+          cp "dist/lib/$AVCODEC_BASE"  dist/lib/libavcodec.so
 
           cp "dist/lib/$AVFORMAT_BASE" dist/lib/libavformat.so.62
           cp "dist/lib/$AVFORMAT_BASE" dist/lib/libavformat.so
 
-          cp "dist/lib/$AVUTIL_BASE"  dist/lib/libavutil.so.60
-          cp "dist/lib/$AVUTIL_BASE"  dist/lib/libavutil.so
+          cp "dist/lib/$AVUTIL_BASE"   dist/lib/libavutil.so.60
+          cp "dist/lib/$AVUTIL_BASE"   dist/lib/libavutil.so
 
-          cp "dist/lib/$SWR_BASE"     dist/lib/libswresample.so.6
-          cp "dist/lib/$SWR_BASE"     dist/lib/libswresample.so
+          cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so.6
+          cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so
 
-          # Create 3sx.sh at root
           cat > dist/3sx.sh <<'SH'
           #!/bin/sh
           PORTDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -348,10 +311,6 @@ jobs:
           SH
           chmod +x dist/3sx.sh
 
-          echo "== dist tree =="
-          find dist -maxdepth 2 -type f -print
-
-          # Package
           tar -C dist -czf 3sx-linux-arm64.tar.gz .
 
       - name: Upload artifact
