@@ -1,6 +1,3 @@
-# NOTE: This workflow is confirmed working on RockNIX (RK3566) as of 2026-02-25.
-# Do not change without testing on-device. Key runtime fix is SDL_RENDER_DRIVER=opengles2 in launcher.
-
 name: Build (Linux ARM64 Cross-Compile)
 
 on:
@@ -21,11 +18,11 @@ jobs:
         run: |
           set -euxo pipefail
           apt-get update
-          apt-get install -y git curl xz-utils bzip2 ca-certificates tar \
+          apt-get install -y \
+            git curl xz-utils bzip2 ca-certificates tar \
             cmake ninja-build make pkg-config \
             autoconf automake libtool gettext texinfo \
-            crossbuild-essential-arm64 \
-            clang zip file
+            crossbuild-essential-arm64 zip file
 
           dpkg --add-architecture arm64
 
@@ -43,184 +40,12 @@ jobs:
 
           apt-get update
 
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Cache third_party
-        uses: actions/cache@v4
-        with:
-          path: third_party
-          key: Linux-arm64-cross-${{ hashFiles('build-deps.sh', 'CMakeLists.txt', 'cmake/**', '.github/workflows/**') }}
-
-      - name: Install ARM64 dev libs for SDL3 (from apt)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          apt-get update
-          apt-get install -y \
-            libasound2-dev:arm64 libpulse-dev:arm64 \
-            libx11-dev:arm64 libxext-dev:arm64 libxrandr-dev:arm64 \
-            libxcursor-dev:arm64 libxfixes-dev:arm64 libxi-dev:arm64 \
-            libxrender-dev:arm64 libxinerama-dev:arm64 libxtst-dev:arm64 \
-            libxss-dev:arm64 libxkbcommon-dev:arm64 libxkbcommon-x11-dev:arm64 \
-            libdrm-dev:arm64 libgbm-dev:arm64 \
-            libgl1-mesa-dev:arm64 libgles2-mesa-dev:arm64 libegl1-mesa-dev:arm64 \
-            libdbus-1-dev:arm64 libudev-dev:arm64 \
-            libpipewire-0.3-dev:arm64 \
-            libwayland-dev:arm64 libwayland-egl1:arm64 libdecor-0-dev:arm64 \
-            wayland-protocols
-
-      - name: Set pkg-config for cross (arm64)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1" >> "$GITHUB_ENV"
-
-      - name: Prepare third_party folder
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/third_party"
-
-      - name: Build libcdio (aarch64)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          TP="$GITHUB_WORKSPACE/third_party"
-          PREFIX="$TP/libcdio/build"
-          SRC="$TP/libcdio-src"
-          VER="2.2.0"
-
-          if [ -f "$PREFIX/include/cdio/iso9660.h" ] && [ -f "$PREFIX/lib/libcdio.a" ]; then
-            echo "libcdio already built in $PREFIX"
-            exit 0
-          fi
-
-          rm -rf "$SRC"
-          mkdir -p "$SRC"
-          cd "$SRC"
-
-          curl -L --retry 5 --retry-delay 2 \
-            -o "libcdio-${VER}.tar.gz" \
-            "https://github.com/libcdio/libcdio/releases/download/${VER}/libcdio-${VER}.tar.gz"
-
-          tar xzf "libcdio-${VER}.tar.gz"
-          cd "libcdio-${VER}"
-
-          ./configure \
-            --host=aarch64-linux-gnu \
-            --prefix="$PREFIX" \
-            --disable-shared \
-            --enable-static
-
-          make -j"$(nproc)"
-          make install
-
-          test -f "$PREFIX/include/cdio/iso9660.h"
-          test -f "$PREFIX/lib/libcdio.a"
-          test -f "$PREFIX/lib/libiso9660.a"
-
-      - name: Create libcdio.pc for pkg-config (local)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
-          PCDIR="$PREFIX/lib/pkgconfig"
-          mkdir -p "$PCDIR"
-
-          printf '%s\n' \
-            "prefix=$PREFIX" \
-            "exec_prefix=\${prefix}" \
-            "libdir=\${prefix}/lib" \
-            "includedir=\${prefix}/include" \
-            "" \
-            "Name: libcdio" \
-            "Description: Compact Disc Input and Control Library" \
-            "Version: 2.2.0" \
-            "Libs: -L\${libdir} -liso9660 -lcdio" \
-            "Cflags: -I\${includedir}" \
-            > "$PCDIR/libcdio.pc"
-
-          ls -la "$PCDIR"
-          cat "$PCDIR/libcdio.pc"
-
-      - name: Build FFmpeg (aarch64)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          TP="$GITHUB_WORKSPACE/third_party"
-          cd "$TP"
-
-          FFMPEG="ffmpeg-8.0"
-          INSTALL="$TP/ffmpeg/build"
-
-          if [ -f "$INSTALL/lib/libavcodec.so" ]; then
-            echo "FFmpeg already built."
-            exit 0
-          fi
-
-          mkdir -p ffmpeg && cd ffmpeg
-          if [ ! -d "$FFMPEG" ]; then
-            curl -L -O "https://ffmpeg.org/releases/$FFMPEG.tar.xz"
-            tar xf "$FFMPEG.tar.xz"
-          fi
-
-          cd "$FFMPEG"
-          mkdir -p build && cd build
-
-          ../configure \
-            --prefix="$INSTALL" \
-            --arch=aarch64 \
-            --target-os=linux \
-            --enable-cross-compile \
-            --cross-prefix=aarch64-linux-gnu- \
-            --disable-x86asm \
-            --disable-static --enable-shared \
-            --disable-all --disable-autodetect \
-            --enable-avcodec --enable-avformat --enable-avutil --enable-swresample \
-            --enable-decoder=adpcm_adx --enable-parser=adx --enable-muxer=adx
-
-          make -j"$(nproc)"
-          make install
-
-      - name: Build SDL3 (aarch64)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          TP="$GITHUB_WORKSPACE/third_party"
-          cd "$TP"
-
-          SDL="SDL3-3.2.24"
-          INSTALL="$TP/sdl3/build"
-
-          if [ -f "$INSTALL/lib/libSDL3.so" ] || [ -f "$INSTALL/lib64/libSDL3.so" ]; then
-            echo "SDL3 already built."
-            exit 0
-          fi
-
-          mkdir -p sdl3 && cd sdl3
-          if [ ! -d "$SDL" ]; then
-            curl -L -O "https://libsdl.org/release/$SDL.tar.gz"
-            tar xf "$SDL.tar.gz"
-          fi
-
-          cd "$SDL"
-          mkdir -p build && cd build
-
-          cmake .. -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
-            -DCMAKE_INSTALL_PREFIX="$INSTALL" \
-            -DBUILD_SHARED_LIBS=ON \
-            -DSDL_STATIC=OFF
-
-          cmake --build . --parallel
-          cmake --install .
-
-      - name: Build 3sx (Linux ARM64)
+      - name: Build Release
         shell: bash
         run: |
           set -euxo pipefail
@@ -230,7 +55,7 @@ jobs:
 
           PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
           PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
-          cmake -S . -B build-linux-arm64 -G Ninja \
+          cmake -S . -B build-release -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
             -DCMAKE_PREFIX_PATH="$LIBCDIO_PREFIX" \
@@ -238,92 +63,31 @@ jobs:
             -DCMAKE_INCLUDE_PATH="$LIBCDIO_PREFIX/include" \
             -DCMAKE_EXE_LINKER_FLAGS="-L$LIBCDIO_PREFIX/lib"
 
-          cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
+          cmake --build build-release --parallel
 
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log-linux-arm64
-          path: build.log
-
-      - name: Package ARM64 build RockNIX
+      - name: Build Debug
         shell: bash
         run: |
           set -euxo pipefail
 
-          rm -rf dist
-          mkdir -p dist/bin dist/lib
+          LIBCDIO_PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
+          LIBCDIO_PC="$LIBCDIO_PREFIX/lib/pkgconfig"
 
-          cp build-linux-arm64/3sx dist/bin/3sx
-          chmod +x dist/bin/3sx
+          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+          PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
+          cmake -S . -B build-debug -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
+            -DCMAKE_PREFIX_PATH="$LIBCDIO_PREFIX" \
+            -DCMAKE_LIBRARY_PATH="$LIBCDIO_PREFIX/lib" \
+            -DCMAKE_INCLUDE_PATH="$LIBCDIO_PREFIX/include" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$LIBCDIO_PREFIX/lib"
 
-          if [ -d third_party/sdl3/build/lib64 ]; then
-            SDL_LIBDIR="third_party/sdl3/build/lib64"
-          else
-            SDL_LIBDIR="third_party/sdl3/build/lib"
-          fi
-          FF_LIBDIR="third_party/ffmpeg/build/lib"
-
-          pick_latest() { ls -1 $1 2>/dev/null | sort -V | tail -n 1; }
-
-          SDL_REAL="$(pick_latest "$SDL_LIBDIR/libSDL3.so.0.*")"
-          AVCODEC_REAL="$(pick_latest "$FF_LIBDIR/libavcodec.so.62.*")"
-          AVFORMAT_REAL="$(pick_latest "$FF_LIBDIR/libavformat.so.62.*")"
-          AVUTIL_REAL="$(pick_latest "$FF_LIBDIR/libavutil.so.60.*")"
-          SWR_REAL="$(pick_latest "$FF_LIBDIR/libswresample.so.6.*")"
-
-          test -n "$SDL_REAL"
-          test -n "$AVCODEC_REAL"
-          test -n "$AVFORMAT_REAL"
-          test -n "$AVUTIL_REAL"
-          test -n "$SWR_REAL"
-
-          cp -L "$SDL_REAL"      "dist/lib/$(basename "$SDL_REAL")"
-          cp -L "$AVCODEC_REAL"  "dist/lib/$(basename "$AVCODEC_REAL")"
-          cp -L "$AVFORMAT_REAL" "dist/lib/$(basename "$AVFORMAT_REAL")"
-          cp -L "$AVUTIL_REAL"   "dist/lib/$(basename "$AVUTIL_REAL")"
-          cp -L "$SWR_REAL"      "dist/lib/$(basename "$SWR_REAL")"
-
-          SDL_BASE="$(basename "$SDL_REAL")"
-          AVCODEC_BASE="$(basename "$AVCODEC_REAL")"
-          AVFORMAT_BASE="$(basename "$AVFORMAT_REAL")"
-          AVUTIL_BASE="$(basename "$AVUTIL_REAL")"
-          SWR_BASE="$(basename "$SWR_REAL")"
-
-          cp "dist/lib/$SDL_BASE"      dist/lib/libSDL3.so.0
-          cp "dist/lib/$SDL_BASE"      dist/lib/libSDL3.so
-
-          cp "dist/lib/$AVCODEC_BASE"  dist/lib/libavcodec.so.62
-          cp "dist/lib/$AVCODEC_BASE"  dist/lib/libavcodec.so
-
-          cp "dist/lib/$AVFORMAT_BASE" dist/lib/libavformat.so.62
-          cp "dist/lib/$AVFORMAT_BASE" dist/lib/libavformat.so
-
-          cp "dist/lib/$AVUTIL_BASE"   dist/lib/libavutil.so.60
-          cp "dist/lib/$AVUTIL_BASE"   dist/lib/libavutil.so
-
-          cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so.6
-          cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so
-
-          cat > dist/3sx.sh <<'SH'
-          #!/bin/sh
-          PORTDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-          export LD_LIBRARY_PATH="$PORTDIR/lib:$LD_LIBRARY_PATH"
-          exec "$PORTDIR/bin/3sx" "$@"
-          SH
-          chmod +x dist/3sx.sh
-
-          tar -C dist -czf 3sx-linux-arm64.tar.gz .
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: 3sx-linux-arm64
-          path: 3sx-linux-arm64.tar.gz
+          cmake --build build-debug --parallel
 
       - name: Verify architecture
         shell: bash
         run: |
           set -euxo pipefail
-          file build-linux-arm64/3sx | grep -q aarch64
+          file build-release/3sx | grep -q 'aarch64'
+          file build-debug/3sx   | grep -q 'aarch64'
