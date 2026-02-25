@@ -22,7 +22,7 @@ jobs:
             cmake ninja-build make pkg-config \
             autoconf automake libtool gettext texinfo \
             crossbuild-essential-arm64 \
-            clang zip file
+            clang zip file binutils
 
           dpkg --add-architecture arm64
 
@@ -217,7 +217,7 @@ jobs:
           cmake --build . --parallel
           cmake --install .
 
-      - name: Build 3sx (Linux ARM64)
+      - name: Build 3sx (Linux ARM64) - RK3566 safe (Cortex-A55, no outline atomics)
         shell: bash
         run: |
           set -euxo pipefail
@@ -225,11 +225,20 @@ jobs:
           LIBCDIO_PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
           LIBCDIO_PC="$LIBCDIO_PREFIX/lib/pkgconfig"
 
+          # Conservative flags for RK3566 (Cortex-A55)
+          SAFE_CFLAGS="-O2 -pipe -mcpu=cortex-a55 -mtune=cortex-a55 -mno-outline-atomics"
+          SAFE_CXXFLAGS="-O2 -pipe -mcpu=cortex-a55 -mtune=cortex-a55 -mno-outline-atomics"
+
           PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
           PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
           cmake -S . -B build-linux-arm64 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+            -DCMAKE_C_FLAGS="$SAFE_CFLAGS" \
+            -DCMAKE_CXX_FLAGS="$SAFE_CXXFLAGS" \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
             -DCMAKE_PREFIX_PATH="$LIBCDIO_PREFIX" \
             -DCMAKE_LIBRARY_PATH="$LIBCDIO_PREFIX/lib" \
             -DCMAKE_INCLUDE_PATH="$LIBCDIO_PREFIX/include" \
@@ -237,12 +246,25 @@ jobs:
 
           cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
 
+          # Helpful ISA/ABI info (upload as artifact)
+          readelf -A build-linux-arm64/3sx | tee readelf_A.txt || true
+          file build-linux-arm64/3sx | tee file.txt
+
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-log-linux-arm64
           path: build.log
+
+      - name: Upload readelf/file info
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64-binary-info
+          path: |
+            readelf_A.txt
+            file.txt
 
       - name: Package ARM64 build RockNIX
         shell: bash
@@ -288,6 +310,7 @@ jobs:
           AVUTIL_BASE="$(basename "$AVUTIL_REAL")"
           SWR_BASE="$(basename "$SWR_REAL")"
 
+          # no symlinks: duplicate files with expected SONAME names
           cp "dist/lib/$SDL_BASE"      dist/lib/libSDL3.so.0
           cp "dist/lib/$SDL_BASE"      dist/lib/libSDL3.so
 
