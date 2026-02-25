@@ -101,7 +101,6 @@ jobs:
           mkdir -p "$SRC"
           cd "$SRC"
 
-          # Switch to .tar.gz to avoid lbzip2 dependency in CI
           curl -L --retry 5 --retry-delay 2 \
             -o "libcdio-${VER}.tar.gz" \
             "https://github.com/libcdio/libcdio/releases/download/${VER}/libcdio-${VER}.tar.gz"
@@ -130,7 +129,6 @@ jobs:
           PCDIR="$PREFIX/lib/pkgconfig"
           mkdir -p "$PCDIR"
 
-          # IMPORTANT: static link order matters: libiso9660 depends on libcdio
           printf '%s\n' \
             "prefix=$PREFIX" \
             "exec_prefix=\${prefix}" \
@@ -219,7 +217,7 @@ jobs:
           cmake --build . --parallel
           cmake --install .
 
-      - name: Build 3sx (Linux ARM64) - forced pkg-config + link path for libcdio
+      - name: Build 3sx (Linux ARM64)
         shell: bash
         run: |
           set -euxo pipefail
@@ -227,30 +225,13 @@ jobs:
           LIBCDIO_PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
           LIBCDIO_PC="$LIBCDIO_PREFIX/lib/pkgconfig"
 
-          echo "== sanity: pkg-config sees libcdio? =="
           PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
           PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
-          pkg-config --modversion libcdio
-
-          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-          PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
-          pkg-config --cflags --libs libcdio
-
-          echo "== sanity: libcdio static libs exist? =="
-          ls -la "$LIBCDIO_PREFIX/lib" | head -n 50
-
-          echo "== configuring cmake (force lib search path) =="
-          PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
-          PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
-          cmake -S . -B build-linux-arm64 -G Ninja \
+          cmake -B build-linux-arm64 \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
-            -DCMAKE_PREFIX_PATH="$LIBCDIO_PREFIX" \
-            -DCMAKE_LIBRARY_PATH="$LIBCDIO_PREFIX/lib" \
-            -DCMAKE_INCLUDE_PATH="$LIBCDIO_PREFIX/include" \
-            -DCMAKE_EXE_LINKER_FLAGS="-L$LIBCDIO_PREFIX/lib"
-
-          cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
+            -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-linux-gnu.cmake \
+            -G Ninja
+          cmake --build build-linux-arm64 --parallel
 
       - name: Upload build log
         if: always()
@@ -259,13 +240,74 @@ jobs:
           name: build-log-linux-arm64
           path: build.log
 
-      - name: Package ARM64 build
+      - name: Package ARM64 build RockNIX
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p dist
-          cp build-linux-arm64/3sx dist/
-          (cd dist && tar -czf ../3sx-linux-arm64.tar.gz .)
+
+          rm -rf dist
+          mkdir -p dist/bin dist/lib
+
+          cp build-linux-arm64/3sx dist/bin/3sx
+          chmod +x dist/bin/3sx
+
+          if [ -d third_party/sdl3/build/lib64 ]; then
+            SDL_LIBDIR="third_party/sdl3/build/lib64"
+          else
+            SDL_LIBDIR="third_party/sdl3/build/lib"
+          fi
+          FF_LIBDIR="third_party/ffmpeg/build/lib"
+
+          pick_latest() { ls -1 $1 2>/dev/null | sort -V | tail -n 1; }
+
+          SDL_REAL="$(pick_latest "$SDL_LIBDIR/libSDL3.so.0.*")"
+          AVCODEC_REAL="$(pick_latest "$FF_LIBDIR/libavcodec.so.62.*")"
+          AVFORMAT_REAL="$(pick_latest "$FF_LIBDIR/libavformat.so.62.*")"
+          AVUTIL_REAL="$(pick_latest "$FF_LIBDIR/libavutil.so.60.*")"
+          SWR_REAL="$(pick_latest "$FF_LIBDIR/libswresample.so.6.*")"
+
+          test -n "$SDL_REAL"
+          test -n "$AVCODEC_REAL"
+          test -n "$AVFORMAT_REAL"
+          test -n "$AVUTIL_REAL"
+          test -n "$SWR_REAL"
+
+          cp -L "$SDL_REAL"      "dist/lib/$(basename "$SDL_REAL")"
+          cp -L "$AVCODEC_REAL"  "dist/lib/$(basename "$AVCODEC_REAL")"
+          cp -L "$AVFORMAT_REAL" "dist/lib/$(basename "$AVFORMAT_REAL")"
+          cp -L "$AVUTIL_REAL"   "dist/lib/$(basename "$AVUTIL_REAL")"
+          cp -L "$SWR_REAL"      "dist/lib/$(basename "$SWR_REAL")"
+
+          SDL_BASE="$(basename "$SDL_REAL")"
+          AVCODEC_BASE="$(basename "$AVCODEC_REAL")"
+          AVFORMAT_BASE="$(basename "$AVFORMAT_REAL")"
+          AVUTIL_BASE="$(basename "$AVUTIL_REAL")"
+          SWR_BASE="$(basename "$SWR_REAL")"
+
+          cp "dist/lib/$SDL_BASE"      dist/lib/libSDL3.so.0
+          cp "dist/lib/$SDL_BASE"      dist/lib/libSDL3.so
+
+          cp "dist/lib/$AVCODEC_BASE"  dist/lib/libavcodec.so.62
+          cp "dist/lib/$AVCODEC_BASE"  dist/lib/libavcodec.so
+
+          cp "dist/lib/$AVFORMAT_BASE" dist/lib/libavformat.so.62
+          cp "dist/lib/$AVFORMAT_BASE" dist/lib/libavformat.so
+
+          cp "dist/lib/$AVUTIL_BASE"   dist/lib/libavutil.so.60
+          cp "dist/lib/$AVUTIL_BASE"   dist/lib/libavutil.so
+
+          cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so.6
+          cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so
+
+          cat > dist/3sx.sh <<'SH'
+          #!/bin/sh
+          PORTDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$PORTDIR/lib:$LD_LIBRARY_PATH"
+          exec "$PORTDIR/bin/3sx" "$@"
+          SH
+          chmod +x dist/3sx.sh
+
+          tar -C dist -czf 3sx-linux-arm64.tar.gz .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
