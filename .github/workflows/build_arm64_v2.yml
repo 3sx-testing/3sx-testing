@@ -130,7 +130,7 @@ jobs:
           PCDIR="$PREFIX/lib/pkgconfig"
           mkdir -p "$PCDIR"
 
-          # No heredoc (YAML-safe)
+          # IMPORTANT: static link order matters: libiso9660 depends on libcdio
           printf '%s\n' \
             "prefix=$PREFIX" \
             "exec_prefix=\${prefix}" \
@@ -140,7 +140,7 @@ jobs:
             "Name: libcdio" \
             "Description: Compact Disc Input and Control Library" \
             "Version: 2.2.0" \
-            "Libs: -L\${libdir} -lcdio -liso9660" \
+            "Libs: -L\${libdir} -liso9660 -lcdio" \
             "Cflags: -I\${includedir}" \
             > "$PCDIR/libcdio.pc"
 
