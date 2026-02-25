@@ -1,3 +1,6 @@
+# NOTE: This workflow is confirmed working on RockNIX (RK3566) as of 2026-02-25.
+# Do not change without testing on-device. Key runtime fix is SDL_RENDER_DRIVER=opengles2 in launcher.
+
 name: Build (Linux ARM64 Cross-Compile)
 
 on:
