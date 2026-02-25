@@ -101,7 +101,6 @@ jobs:
           mkdir -p "$SRC"
           cd "$SRC"
 
-          # Switch to .tar.gz to avoid lbzip2 dependency in CI
           curl -L --retry 5 --retry-delay 2 \
             -o "libcdio-${VER}.tar.gz" \
             "https://github.com/libcdio/libcdio/releases/download/${VER}/libcdio-${VER}.tar.gz"
@@ -237,7 +236,7 @@ jobs:
           pkg-config --cflags --libs libcdio
 
           echo "== sanity: libcdio static libs exist? =="
-          ls -la "$LIBCDIO_PREFIX/lib" | head -n 50
+          ls -la "$LIBCDIO_PREFIX/lib" | head -n 80
 
           echo "== configuring cmake (force lib search path) =="
           PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
@@ -259,13 +258,101 @@ jobs:
           name: build-log-linux-arm64
           path: build.log
 
-      - name: Package ARM64 build
+      - name: Package ARM64 build (RockNIX layout: 3sx.sh + bin/ + lib/ no symlinks)
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p dist
-          cp build-linux-arm64/3sx dist/
-          (cd dist && tar -czf ../3sx-linux-arm64.tar.gz .)
+
+          # Create:
+          #   dist/
+          #     3sx.sh
+          #     bin/3sx
+          #     lib/<real files, duplicated names>
+          rm -rf dist
+          mkdir -p dist/bin dist/lib
+
+          # Put binary in bin/
+          cp build-linux-arm64/3sx dist/bin/3sx
+          chmod +x dist/bin/3sx
+
+          # Resolve SDL3 lib dir (lib or lib64)
+          if [ -d third_party/sdl3/build/lib64 ]; then
+            SDL_LIBDIR="third_party/sdl3/build/lib64"
+          else
+            SDL_LIBDIR="third_party/sdl3/build/lib"
+          fi
+          FF_LIBDIR="third_party/ffmpeg/build/lib"
+
+          # Helper: pick newest/highest version by sort -V (works with x.y.z)
+          pick_latest() {
+            # usage: pick_latest "globpattern"
+            # returns a single path
+            ls -1 $1 2>/dev/null | sort -V | tail -n 1
+          }
+
+          # Find the "real" versioned libs
+          SDL_REAL="$(pick_latest "$SDL_LIBDIR/libSDL3.so.0.*")"
+          AVCODEC_REAL="$(pick_latest "$FF_LIBDIR/libavcodec.so.62.*")"
+          AVFORMAT_REAL="$(pick_latest "$FF_LIBDIR/libavformat.so.62.*")"
+          AVUTIL_REAL="$(pick_latest "$FF_LIBDIR/libavutil.so.60.*")"
+          SWR_REAL="$(pick_latest "$FF_LIBDIR/libswresample.so.6.*")"
+
+          test -n "$SDL_REAL"
+          test -n "$AVCODEC_REAL"
+          test -n "$AVFORMAT_REAL"
+          test -n "$AVUTIL_REAL"
+          test -n "$SWR_REAL"
+
+          echo "== detected libs =="
+          echo "SDL_REAL=$SDL_REAL"
+          echo "AVCODEC_REAL=$AVCODEC_REAL"
+          echo "AVFORMAT_REAL=$AVFORMAT_REAL"
+          echo "AVUTIL_REAL=$AVUTIL_REAL"
+          echo "SWR_REAL=$SWR_REAL"
+
+          # Copy the real versioned files (follow symlinks if any)
+          cp -L "$SDL_REAL"      "dist/lib/$(basename "$SDL_REAL")"
+          cp -L "$AVCODEC_REAL"  "dist/lib/$(basename "$AVCODEC_REAL")"
+          cp -L "$AVFORMAT_REAL" "dist/lib/$(basename "$AVFORMAT_REAL")"
+          cp -L "$AVUTIL_REAL"   "dist/lib/$(basename "$AVUTIL_REAL")"
+          cp -L "$SWR_REAL"      "dist/lib/$(basename "$SWR_REAL")"
+
+          # Duplicate/rename (NO symlinks) to match the exact names you want
+          SDL_BASE="$(basename "$SDL_REAL")"
+          AVCODEC_BASE="$(basename "$AVCODEC_REAL")"
+          AVFORMAT_BASE="$(basename "$AVFORMAT_REAL")"
+          AVUTIL_BASE="$(basename "$AVUTIL_REAL")"
+          SWR_BASE="$(basename "$SWR_REAL")"
+
+          cp "dist/lib/$SDL_BASE"     dist/lib/libSDL3.so.0
+          cp "dist/lib/$SDL_BASE"     dist/lib/libSDL3.so
+
+          cp "dist/lib/$AVCODEC_BASE" dist/lib/libavcodec.so.62
+          cp "dist/lib/$AVCODEC_BASE" dist/lib/libavcodec.so
+
+          cp "dist/lib/$AVFORMAT_BASE" dist/lib/libavformat.so.62
+          cp "dist/lib/$AVFORMAT_BASE" dist/lib/libavformat.so
+
+          cp "dist/lib/$AVUTIL_BASE"  dist/lib/libavutil.so.60
+          cp "dist/lib/$AVUTIL_BASE"  dist/lib/libavutil.so
+
+          cp "dist/lib/$SWR_BASE"     dist/lib/libswresample.so.6
+          cp "dist/lib/$SWR_BASE"     dist/lib/libswresample.so
+
+          # Create 3sx.sh at root
+          cat > dist/3sx.sh <<'SH'
+          #!/bin/sh
+          PORTDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$PORTDIR/lib:$LD_LIBRARY_PATH"
+          exec "$PORTDIR/bin/3sx" "$@"
+          SH
+          chmod +x dist/3sx.sh
+
+          echo "== dist tree =="
+          find dist -maxdepth 2 -type f -print
+
+          # Package
+          tar -C dist -czf 3sx-linux-arm64.tar.gz .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
