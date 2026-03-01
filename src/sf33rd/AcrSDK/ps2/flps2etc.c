@@ -64,7 +64,12 @@ s32 flFileRead(s8* filename, void* buf, s32 len) {
         return 0;
     }
 
-    read(fd, buf, len);
+    // GCC/glibc may mark read() as warn_unused_result; consume the return.
+    {
+        ssize_t r = read(fd, buf, (size_t)len);
+        (void)r;
+    }
+
     close(fd);
     return 1;
 }
@@ -80,11 +85,17 @@ s32 flFileWrite(s8* filename, void* buf, s32 len) {
     strupr(p);
     strcat(temp, ";1");
 
-    if ((fd = open(temp, O_WRONLY | O_CREAT | O_TRUNC)) < 0) {
+    // If O_CREAT is used, open() MUST have a 3rd mode argument on glibc.
+    if ((fd = open(temp, O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0) {
         return 0;
     }
 
-    write(fd, buf, len);
+    // GCC/glibc may mark write() as warn_unused_result; consume the return.
+    {
+        ssize_t w = write(fd, buf, (size_t)len);
+        (void)w;
+    }
+
     close(fd);
     return 1;
 }
@@ -100,12 +111,20 @@ s32 flFileAppend(s8* filename, void* buf, ssize_t len) {
     strupr(p);
     strcat(temp, ";1");
 
+    // Keep original behavior (open existing file). If you ever change this to O_CREAT,
+    // remember to add the 3rd "mode" argument (e.g. 0644).
     if ((fd = open(temp, O_WRONLY)) < 0) {
         return 0;
     }
 
     lseek(fd, 0, 2);
-    write(fd, buf, (s32)len);
+
+    // GCC/glibc may mark write() as warn_unused_result; consume the return.
+    {
+        ssize_t w = write(fd, buf, (size_t)len);
+        (void)w;
+    }
+
     close(fd);
     return 1;
 }
