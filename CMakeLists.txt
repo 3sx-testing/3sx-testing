@@ -87,6 +87,12 @@ target_compile_options(3sx PRIVATE
     ${DISABLED_WARNINGS}
 )
 
+target_link_libraries(3sx PRIVATE
+    m
+    GekkoNet
+    stdc++
+)
+
 set_target_properties(3sx PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/cmake/Info.plist"
 )
@@ -108,29 +114,37 @@ endif()
 # ======================================
 
 set(THIRD_PARTY_DIR "${CMAKE_SOURCE_DIR}/third_party")
-
-set(FFMPEG_ROOT    "${THIRD_PARTY_DIR}/ffmpeg/build")
-set(SDL3_ROOT      "${THIRD_PARTY_DIR}/sdl3/build")
-set(LIBCDIO_ROOT   "${THIRD_PARTY_DIR}/libcdio/build")
-set(GEKKONET_ROOT  "${THIRD_PARTY_DIR}/GekkoNet/build")
-set(SDL3_NET_ROOT  "${THIRD_PARTY_DIR}/SDL_net/build")
-
+set(FFMPEG_ROOT "${THIRD_PARTY_DIR}/ffmpeg/build")
+set(SDL3_ROOT "${THIRD_PARTY_DIR}/sdl3/build")
 include_directories(
     ${FFMPEG_ROOT}/include
     ${SDL3_ROOT}/include
-    ${LIBCDIO_ROOT}/include
-    ${GEKKONET_ROOT}/include
-    ${SDL3_NET_ROOT}/include
 )
 
-target_link_libraries(3sx PRIVATE
-    m
-    "${LIBCDIO_ROOT}/lib/libiso9660.a"
-    "${LIBCDIO_ROOT}/lib/libcdio.a"
-    "${GEKKONET_ROOT}/lib/libGekkoNet.a"
-    "${SDL3_NET_ROOT}/lib/libSDL3_net.a"
-    stdc++
-)
+# ---- libcdio handling ----
+# Linux: use system libcdio via pkg-config (works with :arm64 multiarch in CI)
+# Windows/macOS: keep vendored static libs (your existing behavior)
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(CDIO REQUIRED libcdio)
+
+    target_include_directories(3sx PRIVATE ${CDIO_INCLUDE_DIRS})
+    target_compile_options(3sx PRIVATE ${CDIO_CFLAGS_OTHER})
+    target_link_libraries(3sx PRIVATE ${CDIO_LIBRARIES})
+
+    # Some distros also split iso9660 into a separate lib; link it if present.
+    find_library(ISO9660_LIB iso9660)
+    if(ISO9660_LIB)
+        target_link_libraries(3sx PRIVATE ${ISO9660_LIB})
+    endif()
+else()
+    set(LIBCDIO_ROOT "${THIRD_PARTY_DIR}/libcdio/build")
+    target_include_directories(3sx PRIVATE "${LIBCDIO_ROOT}/include")
+    target_link_libraries(3sx PRIVATE
+        "${LIBCDIO_ROOT}/lib/libiso9660.a"
+        "${LIBCDIO_ROOT}/lib/libcdio.a"
+    )
+endif()
 
 if(APPLE)
     target_link_libraries(3sx PRIVATE
@@ -150,8 +164,6 @@ elseif(WIN32)
         ${SDL3_ROOT}/lib/libSDL3.dll.a
         iconv
 		dbghelp
-        ws2_32
-        iphlpapi
     )
     target_link_options(3sx PRIVATE
         --for-linker
@@ -204,7 +216,7 @@ elseif(WIN32)
 		OUTPUT_VARIABLE binPath
 		OUTPUT_STRIP_TRAILING_WHITESPACE
 	)
-
+	
 	# automatically copies all the dependent DLLS, and ignores the system ones because they aren't necessary
 	install(RUNTIME_DEPENDENCY_SET deps
 		DIRECTORIES ${binPath} "${FFMPEG_ROOT}/bin" "${SDL3_ROOT}/bin"
