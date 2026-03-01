@@ -54,8 +54,12 @@ static SDL_ScaleMode screen_texture_scale_mode() {
     case SCALEMODE_NEAREST:
     case SCALEMODE_SQUARE_PIXELS:
     case SCALEMODE_INTEGER:
-        return SDL_SCALEMODE_NEAREST;
-    }
+    return SDL_SCALEMODE_NEAREST;
+
+default:
+    // Safe fallback: nearest matches expected pixel-art behavior and avoids UB.
+    return SDL_SCALEMODE_NEAREST;
+}
 }
 
 static SDL_Point screen_texture_size() {
@@ -289,12 +293,14 @@ static SDL_FRect get_letterbox_rect(int win_w, int win_h) {
     case SCALEMODE_SOFT_LINEAR:
         return fit_4_by_3_rect(win_w, win_h);
 
-    case SCALEMODE_INTEGER:
-        // In order to scale a 384x224 buffer to 4:3 we need to stretch the image vertically by 9 / 7
-        return fit_integer_rect(win_w, win_h, 7, 9);
-
+    case SCALEMODE_NEAREST:
     case SCALEMODE_SQUARE_PIXELS:
-        return fit_integer_rect(win_w, win_h, 1, 1);
+    case SCALEMODE_INTEGER:
+        return SDL_SCALEMODE_NEAREST;
+
+    default:
+        // Safe fallback: nearest matches expected pixel-art behavior and avoids UB.
+        return SDL_SCALEMODE_NEAREST;
     }
 }
 
