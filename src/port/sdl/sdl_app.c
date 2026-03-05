@@ -261,20 +261,17 @@ bool SDLApp_PollEvents(void) {
             SDLPad_HandleGamepadDeviceEvent(&event.gdevice);
             break;
 
-        case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-        case SDL_EVENT_GAMEPAD_BUTTON_UP:
-            SDLPad_HandleGamepadButtonEvent(&event.gbutton);
-            break;
-
-        case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-            SDLPad_HandleGamepadAxisMotionEvent(&event.gaxis);
-            break;
+        // NOTE:
+        // This codebase polls input state every frame via SDLPad_GetButtonState()
+        // (SDL_GetKeyboardState / SDL_GetGamepadButton / SDL_GetGamepadAxis),
+        // so we do NOT need per-button/per-axis/keyboard event handlers here.
+        // Keeping only device connect/disconnect avoids implicit-decl errors under -Werror
+        // and matches the current SDLPad implementation.
 
         case SDL_EVENT_KEY_DOWN:
         case SDL_EVENT_KEY_UP:
             set_screenshot_flag_if_needed(&event.key);
             handle_fullscreen_toggle(&event.key);
-            SDLPad_HandleKeyboardEvent(&event.key);
             break;
 
         case SDL_EVENT_MOUSE_MOTION:
@@ -287,6 +284,9 @@ bool SDLApp_PollEvents(void) {
 
         case SDL_EVENT_QUIT:
             continue_running = false;
+            break;
+
+        default:
             break;
         }
     }
