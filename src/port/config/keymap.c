@@ -63,26 +63,31 @@ static const char* get_button_name(KeymapButton button) {
         return "back";
     case KEYMAP_BUTTON_START:
         return "start";
+    default:
+        return "unknown";
     }
+
+    // Extra safety for compilers that still warn
+    return "unknown";
 }
 
 static KeymapButton get_button(const char* name) {
     for (int i = 0; i < KEYMAP_BUTTON_COUNT; i++) {
-        const char* this_name = get_button_name(i);
+        const char* this_name = get_button_name((KeymapButton)i);
 
         if (SDL_strcmp(name, this_name) == 0) {
-            return i;
+            return (KeymapButton)i;
         }
     }
 
-    return -1;
+    return (KeymapButton)-1;
 }
 
 static void write_defaults(const char* dst_path) {
     SDL_IOStream* io = SDL_IOFromFile(dst_path, "w");
 
     for (int i = 0; i < KEYMAP_BUTTON_COUNT; i++) {
-        io_printf(io, "%s = ", get_button_name(i));
+        io_printf(io, "%s = ", get_button_name((KeymapButton)i));
 
         bool is_first = true;
 
@@ -110,7 +115,7 @@ static void write_defaults(const char* dst_path) {
 static bool dict_iterator(const char* key, const char* value) {
     const KeymapButton button = get_button(key);
 
-    if (button == -1) {
+    if (button == (KeymapButton)-1) {
         return true;
     }
 
