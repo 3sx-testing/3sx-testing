@@ -88,6 +88,7 @@ target_compile_options(3sx PRIVATE
 
     ${DISABLED_WARNINGS}
 
+    # --- Your needed fix: Debug-only relaxations ---
     $<$<CONFIG:Debug>:-Wno-unused-function>
     $<$<CONFIG:Debug>:-Wno-unused-variable>
 )
@@ -168,7 +169,7 @@ elseif(WIN32)
         ${FFMPEG_ROOT}/lib/libswresample.dll.a
         ${SDL3_ROOT}/lib/libSDL3.dll.a
         iconv
-		dbghelp
+        dbghelp
     )
     target_link_options(3sx PRIVATE
         --for-linker
@@ -213,22 +214,22 @@ if(APPLE)
     )
 elseif(WIN32)
     install(TARGETS 3sx
-		RUNTIME_DEPENDENCY_SET deps
+        RUNTIME_DEPENDENCY_SET deps
         RUNTIME DESTINATION bin
     )
 
     execute_process(COMMAND cygpath -m /mingw64/bin
-		OUTPUT_VARIABLE binPath
-		OUTPUT_STRIP_TRAILING_WHITESPACE
-	)
-	
-	# automatically copies all the dependent DLLS, and ignores the system ones because they aren't necessary
-	install(RUNTIME_DEPENDENCY_SET deps
-		DIRECTORIES ${binPath} "${FFMPEG_ROOT}/bin" "${SDL3_ROOT}/bin"
-		PRE_EXCLUDE_REGEXES "^api"
-		POST_EXCLUDE_REGEXES ".*system32/.*\\.dll"
-		DESTINATION bin
-	)
+        OUTPUT_VARIABLE binPath
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    # automatically copies all the dependent DLLS, and ignores the system ones because they aren't necessary
+    install(RUNTIME_DEPENDENCY_SET deps
+        DIRECTORIES ${binPath} "${FFMPEG_ROOT}/bin" "${SDL3_ROOT}/bin"
+        PRE_EXCLUDE_REGEXES "^api"
+        POST_EXCLUDE_REGEXES ".*system32/.*\\.dll"
+        DESTINATION bin
+    )
 
     install(FILES
         "build/3sx.pdb"
