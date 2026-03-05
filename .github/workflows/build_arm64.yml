@@ -218,11 +218,13 @@ jobs:
           SDL="SDL3-3.2.24"
           INSTALL="$TP/sdl3/build"
 
-          if [ -f "$INSTALL/lib/libSDL3.so" ] || [ -f "$INSTALL/lib64/libSDL3.so" ]; then
-            echo "SDL3 already built."
+          # Sentinel must include SDL3Config.cmake (cache-safe)
+          if [ -f "$INSTALL/lib/cmake/SDL3/SDL3Config.cmake" ] || [ -f "$INSTALL/lib64/cmake/SDL3/SDL3Config.cmake" ]; then
+            echo "SDL3 already built (has SDL3Config.cmake)."
             exit 0
           fi
 
+          rm -rf "$INSTALL"
           mkdir -p sdl3 && cd sdl3
           if [ ! -d "$SDL" ]; then
             curl -L -O "https://libsdl.org/release/$SDL.tar.gz"
@@ -241,6 +243,9 @@ jobs:
           cmake --build . --parallel
           cmake --install .
 
+          # Verify config exists
+          test -f "$INSTALL/lib/cmake/SDL3/SDL3Config.cmake" || test -f "$INSTALL/lib64/cmake/SDL3/SDL3Config.cmake"
+
       - name: Build SDL_net (SDL3_net) from git (aarch64)
         shell: bash
         run: |
@@ -257,6 +262,11 @@ jobs:
             exit 0
           fi
 
+          # Locate SDL3Config.cmake and point SDL_net at it explicitly
+          SDL3_DIR="$(find "$TP/sdl3/build" -name SDL3Config.cmake -printf '%h\n' | head -n 1)"
+          test -n "$SDL3_DIR"
+          echo "Using SDL3_DIR=$SDL3_DIR"
+
           rm -rf "$SRC"
           git clone --depth 1 https://github.com/libsdl-org/SDL_net.git "$SRC"
           cd "$SRC"
@@ -268,7 +278,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
             -DCMAKE_INSTALL_PREFIX="$INSTALL" \
             -DBUILD_SHARED_LIBS=ON \
-            -DCMAKE_PREFIX_PATH="$TP/sdl3/build"
+            -DSDL3_DIR="$SDL3_DIR"
 
           cmake --build . --parallel
           cmake --install .
@@ -284,9 +294,6 @@ jobs:
           LIBCDIO_PC="$LIBCDIO_PREFIX/lib/pkgconfig"
           SDLNET_PREFIX="$GITHUB_WORKSPACE/third_party/sdl_net/build"
 
-          # Inject SDL3_net include + link paths without touching CMakeLists:
-          # - include path provides <SDL3_net/SDL_net.h>
-          # - linker flags add -lSDL3_net
           EXTRA_CFLAGS="-I$SDLNET_PREFIX/include"
           EXTRA_LDFLAGS="-L$SDLNET_PREFIX/lib -lSDL3_net"
 
@@ -337,7 +344,6 @@ jobs:
           AVUTIL_REAL="$(pick_latest "$FF_LIBDIR/libavutil.so.60.*")"
           SWR_REAL="$(pick_latest "$FF_LIBDIR/libswresample.so.6.*")"
 
-          # SDL3_net naming varies across builds (some produce .so.0.*). Grab newest match.
           SDLNET_REAL="$(pick_latest "$SDLNET_LIBDIR/libSDL3_net.so" || true)"
           if [ -z "${SDLNET_REAL:-}" ]; then
             SDLNET_REAL="$(pick_latest "$SDLNET_LIBDIR/libSDL3_net.so.0.*" || true)"
@@ -379,7 +385,6 @@ jobs:
           cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so.6
           cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so
 
-          # Provide stable names for SDL3_net too
           cp "dist/lib/$SDLNET_BASE"   dist/lib/libSDL3_net.so.0 || true
           cp "dist/lib/$SDLNET_BASE"   dist/lib/libSDL3_net.so   || true
 
