@@ -256,8 +256,9 @@ jobs:
           INSTALL="$TP/sdl_net/build"
           SRC="$TP/sdl_net-src"
 
-          # Header we need for 3SX netplay
-          if [ -f "$INSTALL/include/SDL3_net/SDL_net.h" ]; then
+          # Cache-safe sentinel: require BOTH header + shared lib
+          if [ -f "$INSTALL/include/SDL3_net/SDL_net.h" ] && \
+             ( [ -f "$INSTALL/lib/libSDL3_net.so" ] || [ -f "$INSTALL/lib64/libSDL3_net.so" ] ); then
             echo "SDL_net already built."
             exit 0
           fi
@@ -267,7 +268,7 @@ jobs:
           test -n "$SDL3_DIR"
           echo "Using SDL3_DIR=$SDL3_DIR"
 
-          rm -rf "$SRC"
+          rm -rf "$INSTALL" "$SRC"
           git clone --depth 1 https://github.com/libsdl-org/SDL_net.git "$SRC"
           cd "$SRC"
 
@@ -284,6 +285,7 @@ jobs:
           cmake --install .
 
           test -f "$INSTALL/include/SDL3_net/SDL_net.h"
+          test -f "$INSTALL/lib/libSDL3_net.so" || test -f "$INSTALL/lib64/libSDL3_net.so"
 
       - name: Build 3sx (Linux ARM64)
         shell: bash
@@ -292,21 +294,13 @@ jobs:
 
           LIBCDIO_PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
           LIBCDIO_PC="$LIBCDIO_PREFIX/lib/pkgconfig"
-          SDLNET_PREFIX="$GITHUB_WORKSPACE/third_party/sdl_net/build"
 
-          EXTRA_CFLAGS="-I$SDLNET_PREFIX/include"
-          EXTRA_LDFLAGS="-L$SDLNET_PREFIX/lib -lSDL3_net"
-
+          # CMake now links SDL3_net properly; no need for manual -I/-L/-l injection.
           PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
           PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
           cmake -S . -B build-linux-arm64 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
-            -DCMAKE_PREFIX_PATH="$LIBCDIO_PREFIX;$SDLNET_PREFIX" \
-            -DCMAKE_LIBRARY_PATH="$LIBCDIO_PREFIX/lib;$SDLNET_PREFIX/lib" \
-            -DCMAKE_INCLUDE_PATH="$LIBCDIO_PREFIX/include;$SDLNET_PREFIX/include" \
-            -DCMAKE_C_FLAGS="$EXTRA_CFLAGS" \
-            -DCMAKE_EXE_LINKER_FLAGS="-L$LIBCDIO_PREFIX/lib $EXTRA_LDFLAGS"
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake"
 
           cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
 
@@ -334,7 +328,13 @@ jobs:
             SDL_LIBDIR="third_party/sdl3/build/lib"
           fi
           FF_LIBDIR="third_party/ffmpeg/build/lib"
-          SDLNET_LIBDIR="third_party/sdl_net/build/lib"
+
+          # SDL_net may install to lib or lib64
+          if [ -d third_party/sdl_net/build/lib64 ]; then
+            SDLNET_LIBDIR="third_party/sdl_net/build/lib64"
+          else
+            SDLNET_LIBDIR="third_party/sdl_net/build/lib"
+          fi
 
           pick_latest() { ls -1 $1 2>/dev/null | sort -V | tail -n 1; }
 
@@ -344,9 +344,9 @@ jobs:
           AVUTIL_REAL="$(pick_latest "$FF_LIBDIR/libavutil.so.60.*")"
           SWR_REAL="$(pick_latest "$FF_LIBDIR/libswresample.so.6.*")"
 
-          SDLNET_REAL="$(pick_latest "$SDLNET_LIBDIR/libSDL3_net.so" || true)"
+          SDLNET_REAL="$(pick_latest "$SDLNET_LIBDIR/libSDL3_net.so.0.*")"
           if [ -z "${SDLNET_REAL:-}" ]; then
-            SDLNET_REAL="$(pick_latest "$SDLNET_LIBDIR/libSDL3_net.so.0.*" || true)"
+            SDLNET_REAL="$(pick_latest "$SDLNET_LIBDIR/libSDL3_net.so")"
           fi
 
           test -n "$SDL_REAL"
@@ -385,6 +385,7 @@ jobs:
           cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so.6
           cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so
 
+          # Provide stable names for SDL3_net too
           cp "dist/lib/$SDLNET_BASE"   dist/lib/libSDL3_net.so.0 || true
           cp "dist/lib/$SDLNET_BASE"   dist/lib/libSDL3_net.so   || true
 
