@@ -1,4 +1,4 @@
-# 3SX
+# 3SX.arm64
 
 A port of the greatest fighting game of all time for modern platforms.
 
