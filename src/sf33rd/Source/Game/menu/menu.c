@@ -201,12 +201,10 @@ const MenuFunc Menu_Jmp_Tbl[14] = {
     Training_Menu, After_Replay, Disp_Auto_Save2, Wait_Pause_in_Tr,  Reset_Training, Reset_Replay, End_Replay_Menu,
 };
 
-// sbss
 u8 r_no_plus;
 u8 control_player;
 u8 control_pl_rno;
 
-// rodata
 extern const LetterData training_letter_data[6];
 
 void Menu_Task(struct _TASK* task_ptr) {
@@ -4917,7 +4915,7 @@ void Dummy_Move_Sub(struct _TASK* task_ptr, s16 PL_id, s16 id, s16 type, s16 max
     }
 }
 
-const u8 Menu_Max_Data_Tr[2][2][6] = { { { 4, 6, 2, 1, 0, 0 }, { 3, 2, 3, 7, 0, 0 } },
+const u8 Menu_Max_Data_Tr[2][2][6] = { { { 4, 6, 2, 2, 0, 0 }, { 3, 2, 3, 7, 0, 0 } },
                                        { { 2, 3, 1, 3, 0, 0 }, { 0, 0, 0, 0, 0, 0 } } };
 
 static bool is_data_plus_hitboxes_option_selected() {

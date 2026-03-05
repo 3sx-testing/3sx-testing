@@ -129,10 +129,9 @@ void dispControllerWasRemovedMessage(s32 x, s32 y, s32 step) {
 
     if (Pause_ID) {
         SSPutStrPro(0, x, (y + (step * 2)), 9, -1, "controller port 2.");
-        return;
+    } else {
+        SSPutStrPro(0, x, (y + (step * 2)), 9, -1, "controller port 1.");
     }
-
-    SSPutStrPro(0, x, (y + (step * 2)), 9, -1, "controller port 1.");
 }
 
 s32 Check_Pause_Term(u16 sw, u8 PL_id) {
@@ -162,6 +161,13 @@ s32 Check_Pause_Term(u16 sw, u8 PL_id) {
         Pause_Type = 1;
         return PAUSE_X = 1;
     }
+
+#if defined(DEBUG)
+    // This skips checking controller connection status during gameplay testing
+    if (configuration.test.enabled) {
+        return 0;
+    }
+#endif
 
     if (Present_Mode == 3) {
         if (Interface_Type[Decide_ID] == 0) {

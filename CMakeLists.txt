@@ -87,6 +87,9 @@ target_compile_options(3sx PRIVATE
     -fno-strict-aliasing
 
     ${DISABLED_WARNINGS}
+
+    $<$<CONFIG:Debug>:-Wno-unused-function>
+    $<$<CONFIG:Debug>:-Wno-unused-variable>
 )
 
 target_link_libraries(3sx PRIVATE

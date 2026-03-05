@@ -424,7 +424,12 @@ void Game_Manage_2_3() {
     }
 
     C_No[1]++;
-    effect_B2_init();
+
+    if (Is_Training_Mode(Mode_Type)) {
+        Next_Step = 1;
+    } else {
+        effect_B2_init();
+    }
 }
 
 void Game_Manage_2_4() {
@@ -442,7 +447,7 @@ void Game_Manage_2_4() {
         FadeOut(0, 0xFF, 8);
         Disp_Cockpit = 1;
 
-        if (Mode_Type == MODE_NORMAL_TRAINING || Mode_Type == MODE_PARRY_TRAINING) {
+        if (Is_Training_Mode(Mode_Type)) {
             Score[0][2] = 0;
             Score[1][2] = 0;
             Game_pause = 0;
@@ -492,7 +497,7 @@ void Game_Manage_2_4() {
             Check_Stage_BGM();
         }
 
-        if (Demo_Flag == 0) {
+        if (Demo_Flag == 0 && !Is_Training_Mode(Mode_Type)) {
             effect_58_init(10, 60, 0);
         }
 
@@ -1728,17 +1733,13 @@ void Disp_Winner() {
     if (Play_Type == 1) {
         effect_56_init(My_char[Winner_id] + 7, 1);
         SsRequest(141);
-        return;
-    }
-
-    if (Round_Operator[Winner_id]) {
+    } else if (Round_Operator[Winner_id]) {
         effect_56_init(5, 1);
         SsRequest(141);
-        return;
+    } else {
+        effect_56_init(6, 1);
+        SsRequest(142);
     }
-
-    effect_56_init(6, 1);
-    SsRequest(142);
 }
 
 void Pool_Score(s16 PL_id) {
@@ -1754,10 +1755,9 @@ void Pool_Score(s16 PL_id) {
 
     if (save_w[Present_Mode].Time_Limit == -1) {
         Time_Bonus[Winner_id] = 0;
-        return;
+    } else {
+        Time_Bonus[Winner_id] += round_timer * 300;
     }
-
-    Time_Bonus[Winner_id] += round_timer * 300;
 }
 
 s32 Check_Break_Into_CPU(s16 PL_id) {

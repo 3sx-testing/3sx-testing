@@ -1,5 +1,6 @@
 #include "sf33rd/AcrSDK/ps2/flps2etc.h"
 #include "common.h"
+#include "port/utils.h"
 #include "sf33rd/AcrSDK/common/fbms.h"
 #include "sf33rd/AcrSDK/common/memfound.h"
 #include "sf33rd/AcrSDK/common/plapx.h"
@@ -18,7 +19,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#if !defined(TARGET_PS2) && !defined(_WIN32)
+#if !defined(_WIN32)
 #include <ctype.h>
 
 s8* strupr(s8* s) {

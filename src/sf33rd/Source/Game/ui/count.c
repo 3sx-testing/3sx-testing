@@ -14,6 +14,8 @@
 #include "sf33rd/Source/Game/ui/sc_data.h"
 #include "sf33rd/Source/Game/ui/sc_sub.h"
 
+#define HOJI_COUNTER_MAX 53
+
 s8 round_timer;
 s8 flash_timer;
 s8 flash_r_num;
@@ -36,7 +38,7 @@ void count_cont_init(u8 type) {
         }
     } else {
         mugen_flag = false;
-        hoji_counter = 60;
+        hoji_counter = HOJI_COUNTER_MAX;
         Counter_low = hoji_counter;
         round_timer = Counter_hi;
         math_counter_hi = Counter_hi;
@@ -192,7 +194,7 @@ void counter_flash(s8 Flash_Num) {
 
 void bcount_cont_init() {
     Counter_hi = 50;
-    hoji_counter = 60;
+    hoji_counter = HOJI_COUNTER_MAX;
     Counter_low = hoji_counter;
     round_timer = Counter_hi;
     math_counter_hi = 5;
@@ -221,7 +223,7 @@ void bcounter_control() {
         return;
     }
 
-    hoji_counter = 60;
+    hoji_counter = HOJI_COUNTER_MAX;
     Counter_low = hoji_counter;
     Counter_hi -= 1;
     round_timer = Counter_hi;

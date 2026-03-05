@@ -4,6 +4,27 @@
 #include "structs.h"
 #include "types.h"
 
+typedef struct NetplayConfiguration {
+    int p2p_local_player;
+    const char* p2p_remote_ip;
+    const char* matchmaking_ip;
+    int matchmaking_port;
+} NetplayConfiguration;
+
+#if defined(DEBUG)
+typedef struct TestRunnerConfiguration {
+    bool enabled;
+    const char* states_path;
+} TestRunnerConfiguration;
+#endif
+
+typedef struct Configuration {
+    NetplayConfiguration netplay;
+#if defined(DEBUG)
+    TestRunnerConfiguration test;
+#endif
+} Configuration;
+
 typedef enum TaskID {
     TASK_INIT = 0,
     TASK_ENTRY = 1,
@@ -17,6 +38,7 @@ typedef enum TaskID {
 
 extern MPP mpp_w;
 extern s32 system_init_level;
+extern Configuration configuration;
 
 void cpInitTask();
 void cpReadyTask(TaskID num, void* func_adrs);

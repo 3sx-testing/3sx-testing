@@ -5,6 +5,7 @@
 
 #include "sf33rd/Source/Game/effect/effect.h"
 #include "common.h"
+#include "port/utils.h"
 #include "sf33rd/AcrSDK/ps2/flps2debug.h"
 #include "sf33rd/Source/Game/debug/Debug.h"
 #include "sf33rd/Source/Game/effect/effxx.h"
@@ -73,7 +74,7 @@ void disp_effect_work() {
 
             c_addr = (WORK*)frw[curr_ix];
             next_ix = c_addr->behind;
-            flPrintL(px, py, "%c%d", "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[(c_addr->id / 10)], c_addr -> id % 10);
+            flPrintL(px, py, "%c%d", "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[(c_addr->id / 10)], c_addr->id % 10);
             py++;
         }
     }
@@ -219,11 +220,9 @@ void push_effect_work(WORK* wkhd) {
     qix = wkhd->myself;
     c_addr = (WORK*)frw[qix];
 
-#if !defined(TARGET_PS2)
     if (qix < 0 || qix >= 128) {
         fatal_error("qix is out of range");
     }
-#endif
 
     switch ((qix == head_ix[lix]) + (qix == tail_ix[lix]) * 2) {
     case 0:

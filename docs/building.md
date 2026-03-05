@@ -10,7 +10,7 @@
 3. Install the required packages:
 
     ```bash
-    pacman -S make mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja mingw-w64-x86_64-nasm mingw-w64-x86_64-clang mingw-w64-x86_64-headers-git
+    pacman -S make mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja mingw-w64-x86_64-nasm mingw-w64-x86_64-clang mingw-w64-x86_64-headers-git mingw-w64-x86_64-git
     ```
 
 ### Linux
