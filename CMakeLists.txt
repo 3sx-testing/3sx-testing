@@ -11,6 +11,11 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# Fail fast if submodule didn't fetch
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/GekkoNet/CMakeLists.txt")
+  message(FATAL_ERROR "Missing GekkoNet directory. Did you forget to fetch submodules?")
+endif()
+
 add_subdirectory(GekkoNet)
 
 # ======================================
@@ -83,12 +88,10 @@ endif()
 target_compile_options(3sx PRIVATE
     -Wall
     -Werror
-
     -fno-strict-aliasing
-
     ${DISABLED_WARNINGS}
 
-    # --- Your needed fix: Debug-only relaxations ---
+    # Debug-only relaxations
     $<$<CONFIG:Debug>:-Wno-unused-function>
     $<$<CONFIG:Debug>:-Wno-unused-variable>
 )
@@ -120,11 +123,17 @@ endif()
 # ======================================
 
 set(THIRD_PARTY_DIR "${CMAKE_SOURCE_DIR}/third_party")
+
 set(FFMPEG_ROOT "${THIRD_PARTY_DIR}/ffmpeg/build")
 set(SDL3_ROOT "${THIRD_PARTY_DIR}/sdl3/build")
+
+# SDL_net / SDL3_net (for netplay)
+set(SDLNET_ROOT "${THIRD_PARTY_DIR}/sdl_net/build")
+
 include_directories(
     ${FFMPEG_ROOT}/include
     ${SDL3_ROOT}/include
+    ${SDLNET_ROOT}/include
 )
 
 # ---- libcdio handling ----
@@ -152,6 +161,12 @@ else()
     )
 endif()
 
+# Helper to select lib vs lib64 (some installs use lib64)
+set(_SDLNET_LIB_DIR "${SDLNET_ROOT}/lib")
+if(EXISTS "${SDLNET_ROOT}/lib64")
+    set(_SDLNET_LIB_DIR "${SDLNET_ROOT}/lib64")
+endif()
+
 if(APPLE)
     target_link_libraries(3sx PRIVATE
         ${FFMPEG_ROOT}/lib/libavcodec.dylib
@@ -159,6 +174,7 @@ if(APPLE)
         ${FFMPEG_ROOT}/lib/libavutil.dylib
         ${FFMPEG_ROOT}/lib/libswresample.dylib
         ${SDL3_ROOT}/lib/libSDL3.0.dylib
+        # If you ever build SDL3_net on macOS, wire it here too.
         iconv
     )
 elseif(WIN32)
@@ -168,6 +184,7 @@ elseif(WIN32)
         ${FFMPEG_ROOT}/lib/libavutil.dll.a
         ${FFMPEG_ROOT}/lib/libswresample.dll.a
         ${SDL3_ROOT}/lib/libSDL3.dll.a
+        # If you ever build SDL3_net on Windows, wire it here too.
         iconv
         dbghelp
     )
@@ -182,6 +199,7 @@ elseif(UNIX)
         ${FFMPEG_ROOT}/lib/libavutil.so
         ${FFMPEG_ROOT}/lib/libswresample.so
         ${SDL3_ROOT}/lib/libSDL3.so
+        "${_SDLNET_LIB_DIR}/libSDL3_net.so"
     )
 endif()
 
@@ -246,10 +264,14 @@ elseif(UNIX)
     )
 
     file(GLOB FFMPEG_SO "${FFMPEG_ROOT}/lib/*.so*")
+    file(GLOB SDLNET_SO
+        "${_SDLNET_LIB_DIR}/libSDL3_net.so*"
+    )
 
     install(FILES
         ${FFMPEG_SO}
         ${SDL3_ROOT}/lib/libSDL3.so
+        ${SDLNET_SO}
         DESTINATION lib
     )
 
