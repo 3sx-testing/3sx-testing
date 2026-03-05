@@ -243,7 +243,6 @@ jobs:
           cmake --build . --parallel
           cmake --install .
 
-          # Verify config exists
           test -f "$INSTALL/lib/cmake/SDL3/SDL3Config.cmake" || test -f "$INSTALL/lib64/cmake/SDL3/SDL3Config.cmake"
 
       - name: Build SDL_net (SDL3_net) from git (aarch64)
@@ -263,7 +262,6 @@ jobs:
             exit 0
           fi
 
-          # Locate SDL3Config.cmake and point SDL_net at it explicitly
           SDL3_DIR="$(find "$TP/sdl3/build" -name SDL3Config.cmake -printf '%h\n' | head -n 1)"
           test -n "$SDL3_DIR"
           echo "Using SDL3_DIR=$SDL3_DIR"
@@ -271,7 +269,6 @@ jobs:
           rm -rf "$INSTALL" "$SRC"
           git clone --depth 1 https://github.com/libsdl-org/SDL_net.git "$SRC"
           cd "$SRC"
-
           mkdir -p build
           cd build
 
@@ -295,12 +292,16 @@ jobs:
           LIBCDIO_PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
           LIBCDIO_PC="$LIBCDIO_PREFIX/lib/pkgconfig"
 
-          # CMake now links SDL3_net properly; no need for manual -I/-L/-l injection.
+          # Keep the old "working" libcdio path hints so -lcdio/-liso9660 resolves.
           PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
           PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
           cmake -S . -B build-linux-arm64 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake"
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
+            -DCMAKE_PREFIX_PATH="$LIBCDIO_PREFIX" \
+            -DCMAKE_LIBRARY_PATH="$LIBCDIO_PREFIX/lib" \
+            -DCMAKE_INCLUDE_PATH="$LIBCDIO_PREFIX/include" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$LIBCDIO_PREFIX/lib"
 
           cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
 
@@ -329,7 +330,6 @@ jobs:
           fi
           FF_LIBDIR="third_party/ffmpeg/build/lib"
 
-          # SDL_net may install to lib or lib64
           if [ -d third_party/sdl_net/build/lib64 ]; then
             SDLNET_LIBDIR="third_party/sdl_net/build/lib64"
           else
@@ -385,7 +385,6 @@ jobs:
           cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so.6
           cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so
 
-          # Provide stable names for SDL3_net too
           cp "dist/lib/$SDLNET_BASE"   dist/lib/libSDL3_net.so.0 || true
           cp "dist/lib/$SDLNET_BASE"   dist/lib/libSDL3_net.so   || true
 
