@@ -46,7 +46,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           submodules: recursive
+
+      - name: Ensure GekkoNet is present (submodule or pinned clone)
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Try normal submodule init/update (even if checkout already did it)
+          git submodule sync --recursive || true
+          git submodule update --init --recursive || true
+
+          # Fallback: if main no longer carries GekkoNet as a submodule, clone it pinned.
+          if [ ! -d "GekkoNet" ]; then
+            echo "GekkoNet folder missing; cloning pinned HeatXD/GekkoNet commit..."
+            git clone https://github.com/HeatXD/GekkoNet.git GekkoNet
+            cd GekkoNet
+            git checkout ad4b51644b408c2c3308384613a96dc38d7d4afd
+            cd ..
+          fi
+
+          # Fail fast if still missing
+          test -d GekkoNet
+          test -f GekkoNet/CMakeLists.txt
+          echo "GekkoNet OK:"
+          ls -la GekkoNet | head -n 50
 
       - name: Cache third_party
         uses: actions/cache@v4
