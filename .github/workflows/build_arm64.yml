@@ -54,11 +54,9 @@ jobs:
         run: |
           set -euxo pipefail
 
-          # Try normal submodule init/update (even if checkout already did it)
           git submodule sync --recursive || true
           git submodule update --init --recursive || true
 
-          # Fallback: if main no longer carries GekkoNet as a submodule, clone it pinned.
           if [ ! -d "GekkoNet" ]; then
             echo "GekkoNet folder missing; cloning pinned HeatXD/GekkoNet commit..."
             git clone https://github.com/HeatXD/GekkoNet.git GekkoNet
@@ -67,11 +65,9 @@ jobs:
             cd ..
           fi
 
-          # Fail fast if still missing
           test -d GekkoNet
           test -f GekkoNet/CMakeLists.txt
-          echo "GekkoNet OK:"
-          ls -la GekkoNet | head -n 50
+          echo "GekkoNet OK"
 
       - name: Cache third_party
         uses: actions/cache@v4
@@ -245,6 +241,40 @@ jobs:
           cmake --build . --parallel
           cmake --install .
 
+      - name: Build SDL_net (SDL3_net) from git (aarch64)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TP="$GITHUB_WORKSPACE/third_party"
+          cd "$TP"
+
+          INSTALL="$TP/sdl_net/build"
+          SRC="$TP/sdl_net-src"
+
+          # Header we need for 3SX netplay
+          if [ -f "$INSTALL/include/SDL3_net/SDL_net.h" ]; then
+            echo "SDL_net already built."
+            exit 0
+          fi
+
+          rm -rf "$SRC"
+          git clone --depth 1 https://github.com/libsdl-org/SDL_net.git "$SRC"
+          cd "$SRC"
+
+          mkdir -p build
+          cd build
+
+          cmake .. -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
+            -DCMAKE_INSTALL_PREFIX="$INSTALL" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_PREFIX_PATH="$TP/sdl3/build"
+
+          cmake --build . --parallel
+          cmake --install .
+
+          test -f "$INSTALL/include/SDL3_net/SDL_net.h"
+
       - name: Build 3sx (Linux ARM64)
         shell: bash
         run: |
@@ -252,16 +282,24 @@ jobs:
 
           LIBCDIO_PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
           LIBCDIO_PC="$LIBCDIO_PREFIX/lib/pkgconfig"
+          SDLNET_PREFIX="$GITHUB_WORKSPACE/third_party/sdl_net/build"
+
+          # Inject SDL3_net include + link paths without touching CMakeLists:
+          # - include path provides <SDL3_net/SDL_net.h>
+          # - linker flags add -lSDL3_net
+          EXTRA_CFLAGS="-I$SDLNET_PREFIX/include"
+          EXTRA_LDFLAGS="-L$SDLNET_PREFIX/lib -lSDL3_net"
 
           PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
           PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
           cmake -S . -B build-linux-arm64 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
-            -DCMAKE_PREFIX_PATH="$LIBCDIO_PREFIX" \
-            -DCMAKE_LIBRARY_PATH="$LIBCDIO_PREFIX/lib" \
-            -DCMAKE_INCLUDE_PATH="$LIBCDIO_PREFIX/include" \
-            -DCMAKE_EXE_LINKER_FLAGS="-L$LIBCDIO_PREFIX/lib"
+            -DCMAKE_PREFIX_PATH="$LIBCDIO_PREFIX;$SDLNET_PREFIX" \
+            -DCMAKE_LIBRARY_PATH="$LIBCDIO_PREFIX/lib;$SDLNET_PREFIX/lib" \
+            -DCMAKE_INCLUDE_PATH="$LIBCDIO_PREFIX/include;$SDLNET_PREFIX/include" \
+            -DCMAKE_C_FLAGS="$EXTRA_CFLAGS" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$LIBCDIO_PREFIX/lib $EXTRA_LDFLAGS"
 
           cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
 
@@ -289,6 +327,7 @@ jobs:
             SDL_LIBDIR="third_party/sdl3/build/lib"
           fi
           FF_LIBDIR="third_party/ffmpeg/build/lib"
+          SDLNET_LIBDIR="third_party/sdl_net/build/lib"
 
           pick_latest() { ls -1 $1 2>/dev/null | sort -V | tail -n 1; }
 
@@ -298,23 +337,32 @@ jobs:
           AVUTIL_REAL="$(pick_latest "$FF_LIBDIR/libavutil.so.60.*")"
           SWR_REAL="$(pick_latest "$FF_LIBDIR/libswresample.so.6.*")"
 
+          # SDL3_net naming varies across builds (some produce .so.0.*). Grab newest match.
+          SDLNET_REAL="$(pick_latest "$SDLNET_LIBDIR/libSDL3_net.so" || true)"
+          if [ -z "${SDLNET_REAL:-}" ]; then
+            SDLNET_REAL="$(pick_latest "$SDLNET_LIBDIR/libSDL3_net.so.0.*" || true)"
+          fi
+
           test -n "$SDL_REAL"
           test -n "$AVCODEC_REAL"
           test -n "$AVFORMAT_REAL"
           test -n "$AVUTIL_REAL"
           test -n "$SWR_REAL"
+          test -n "${SDLNET_REAL:-}"
 
           cp -L "$SDL_REAL"      "dist/lib/$(basename "$SDL_REAL")"
           cp -L "$AVCODEC_REAL"  "dist/lib/$(basename "$AVCODEC_REAL")"
           cp -L "$AVFORMAT_REAL" "dist/lib/$(basename "$AVFORMAT_REAL")"
           cp -L "$AVUTIL_REAL"   "dist/lib/$(basename "$AVUTIL_REAL")"
           cp -L "$SWR_REAL"      "dist/lib/$(basename "$SWR_REAL")"
+          cp -L "$SDLNET_REAL"   "dist/lib/$(basename "$SDLNET_REAL")"
 
           SDL_BASE="$(basename "$SDL_REAL")"
           AVCODEC_BASE="$(basename "$AVCODEC_REAL")"
           AVFORMAT_BASE="$(basename "$AVFORMAT_REAL")"
           AVUTIL_BASE="$(basename "$AVUTIL_REAL")"
           SWR_BASE="$(basename "$SWR_REAL")"
+          SDLNET_BASE="$(basename "$SDLNET_REAL")"
 
           cp "dist/lib/$SDL_BASE"      dist/lib/libSDL3.so.0
           cp "dist/lib/$SDL_BASE"      dist/lib/libSDL3.so
@@ -330,6 +378,10 @@ jobs:
 
           cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so.6
           cp "dist/lib/$SWR_BASE"      dist/lib/libswresample.so
+
+          # Provide stable names for SDL3_net too
+          cp "dist/lib/$SDLNET_BASE"   dist/lib/libSDL3_net.so.0 || true
+          cp "dist/lib/$SDLNET_BASE"   dist/lib/libSDL3_net.so   || true
 
           cat > dist/3sx.sh <<'SH'
           #!/bin/sh
