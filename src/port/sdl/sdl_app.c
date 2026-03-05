@@ -265,8 +265,8 @@ bool SDLApp_PollEvents(void) {
         // This codebase polls input state every frame via SDLPad_GetButtonState()
         // (SDL_GetKeyboardState / SDL_GetGamepadButton / SDL_GetGamepadAxis),
         // so we do NOT need per-button/per-axis/keyboard event handlers here.
-        // Keeping only device connect/disconnect avoids implicit-decl errors under -Werror
-        // and matches the current SDLPad implementation.
+        // Keeping only device connect/disconnect matches the current SDLPad implementation
+        // and avoids implicit-decl errors under -Werror.
 
         case SDL_EVENT_KEY_DOWN:
         case SDL_EVENT_KEY_UP:
