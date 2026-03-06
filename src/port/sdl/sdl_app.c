@@ -70,6 +70,18 @@ static bool should_save_screenshot = false;
 static Uint64 last_mouse_motion_time = 0;
 static const int mouse_hide_delay_ms = 2000; // 2 seconds
 
+// Runtime toggles (env):
+//   SDLAPP_VSYNC:       "1" (default) or "0"
+//   SDLAPP_SLEEP_PACE:  "1" (default) or "0"  (only relevant when vsync is off)
+static int get_env_bool_default(const char* name, int def_value) {
+    const char* v = SDL_getenv(name);
+    if (!v || !*v) {
+        return def_value;
+    }
+    // Accept 0/1, true/false-ish, etc.
+    return (SDL_atoi(v) != 0) ? 1 : 0;
+}
+
 static SDL_ScaleMode screen_texture_scale_mode(void) {
     switch (scale_mode) {
     case SCALEMODE_LINEAR:
@@ -139,12 +151,15 @@ int SDLApp_Init(void) {
 
     init_scalemode();
 
+    // VSync toggle (default ON)
+    const int want_vsync = get_env_bool_default("SDLAPP_VSYNC", 1);
+
     SDL_SetAppMetadata(app_name, "0.1", NULL);
     SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_PREFER_LIBDECOR, "1");
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
 
-    // Force VSync for deterministic CRT timing (Parity Lab)
-    SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
+    // Let env decide vsync hint (some backends only look at this)
+    SDL_SetHint(SDL_HINT_RENDER_VSYNC, want_vsync ? "1" : "0");
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         SDL_Log("Couldn't initialize SDL: %s", SDL_GetError());
@@ -172,16 +187,16 @@ int SDLApp_Init(void) {
         return 1;
     }
 
-    // Try to enable renderer vsync explicitly
-    if (!SDL_SetRenderVSync(renderer, 1)) {
-        SDL_Log("SDL_SetRenderVSync failed: %s", SDL_GetError());
+    // Apply vsync preference explicitly on the renderer
+    if (!SDL_SetRenderVSync(renderer, want_vsync)) {
+        SDL_Log("SDL_SetRenderVSync(%d) failed: %s", want_vsync, SDL_GetError());
     }
 
     // Optional: log what we actually got
     {
         int vs = 0;
         if (SDL_GetRenderVSync(renderer, &vs)) {
-            SDL_Log("SDL renderer vsync = %d", vs);
+            SDL_Log("SDL renderer vsync = %d (wanted %d)", vs, want_vsync);
         } else {
             SDL_Log("SDL_GetRenderVSync failed: %s", SDL_GetError());
         }
@@ -468,23 +483,31 @@ void SDLApp_EndFrame(void) {
     const bool got_vsync = SDL_GetRenderVSync(renderer, &vsync);
 
     if (!got_vsync || vsync == 0) {
-        Uint64 now = SDL_GetTicksNS();
+        // Allow disabling sleep-based pacing for lowest latency (tearing possible).
+        const int do_sleep_pace = get_env_bool_default("SDLAPP_SLEEP_PACE", 1);
 
-        if (frame_deadline == 0) {
-            frame_deadline = now + target_frame_time_ns;
-        }
+        if (do_sleep_pace) {
+            Uint64 now = SDL_GetTicksNS();
 
-        if (now < frame_deadline) {
-            const Uint64 sleep_time = frame_deadline - now;
-            SDL_DelayNS(sleep_time);
-            now = SDL_GetTicksNS();
-        }
+            if (frame_deadline == 0) {
+                frame_deadline = now + target_frame_time_ns;
+            }
 
-        frame_deadline += target_frame_time_ns;
+            if (now < frame_deadline) {
+                const Uint64 sleep_time = frame_deadline - now;
+                SDL_DelayNS(sleep_time);
+                now = SDL_GetTicksNS();
+            }
 
-        // If we fell behind by more than one frame, resync to avoid spiraling
-        if (now > frame_deadline + target_frame_time_ns) {
-            frame_deadline = now + target_frame_time_ns;
+            frame_deadline += target_frame_time_ns;
+
+            // If we fell behind by more than one frame, resync to avoid spiraling
+            if (now > frame_deadline + target_frame_time_ns) {
+                frame_deadline = now + target_frame_time_ns;
+            }
+        } else {
+            // No sleep pacing: keep deadline reset so toggling back doesn't jump.
+            frame_deadline = 0;
         }
     } else {
         // When vsync is active, don't carry deadline forward (avoid weird jumps if toggling)
