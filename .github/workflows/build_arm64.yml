@@ -6,10 +6,10 @@
 # 1) Use ubuntu:20.04 container + arm64 sysroot from ports.ubuntu.com (focal)
 # 2) Prevent apt from trying to fetch arm64 from archive/security (404) by locking
 #    default repos to [arch=amd64] and putting arm64 repos ONLY in arm64-ports.list
-# 3) Disable SDL3 KMSDRM backend on focal (libdrm headers too old) since your target
-#    handheld stack is Wayland-only anyway.
-# 4) Statically link libstdc++/libgcc into the executable to avoid GLIBCXX/CXXABI
-#    mismatches on the device (glibc still comes from the OS).
+# 3) Install host (amd64) Wayland tools so SDL3 can generate protocol code (wayland-scanner)
+# 4) Force SDL3 to find *target* (arm64) Wayland dev libs via pkg-config env vars
+# 5) Disable SDL3 KMSDRM backend on focal (libdrm headers too old) and disable X11
+# 6) Statically link libstdc++/libgcc into the executable to avoid GLIBCXX/CXXABI mismatches
 
 name: Build (Linux ARM64 Cross-Compile)
 
@@ -45,6 +45,7 @@ jobs:
 
           apt-get update
 
+          # Base build deps (amd64)
           apt-get install -y --no-install-recommends \
             ca-certificates curl git xz-utils bzip2 tar zip file \
             cmake ninja-build make pkg-config \
@@ -52,6 +53,12 @@ jobs:
             clang \
             crossbuild-essential-arm64 \
             binutils-aarch64-linux-gnu
+
+          # --- 3) Host Wayland tools (amd64) for SDL protocol generation ---
+          apt-get install -y --no-install-recommends \
+            wayland-protocols \
+            libwayland-bin \
+            libwayland-dev
 
           # --- 2) Enable arm64, but ONLY via ports.ubuntu.com ---
           dpkg --add-architecture arm64
@@ -102,7 +109,7 @@ jobs:
           set -euxo pipefail
           apt-get update
 
-          # Handheld-friendly deps: Wayland/DRM/EGL/GLES + audio + udev/dbus
+          # Handheld-friendly deps: Wayland/DRM/EGL/GLES + audio + udev/dbus (arm64)
           apt-get install -y \
             libasound2-dev:arm64 libpulse-dev:arm64 \
             libdrm-dev:arm64 libgbm-dev:arm64 \
@@ -253,6 +260,10 @@ jobs:
 
           cd "$SDL"
           mkdir -p build && cd build
+
+          # Force SDL3 to find TARGET (arm64) Wayland via pkg-config
+          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
 
           cmake .. -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
