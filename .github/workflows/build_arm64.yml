@@ -1,5 +1,9 @@
 # NOTE: This workflow is confirmed working on RockNIX (RK3566) as of 2026-02-25.
 # Do not change without testing on-device. Key runtime fix is SDL_RENDER_DRIVER=opengles2 in launcher.
+#
+# STOCK OS COMPAT NOTE:
+# This version builds against an OLDER Ubuntu userspace (20.04 focal) so the resulting binary
+# does NOT require super-new GLIBC/GLIBCXX like your 25.04 (plucky) container did.
 
 name: Build (Linux ARM64 Cross-Compile)
 
@@ -13,32 +17,40 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:25.04
+      image: ubuntu:20.04
 
     steps:
       - name: Install toolchain
         shell: bash
         run: |
           set -euxo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+
           apt-get update
           apt-get install -y git curl xz-utils bzip2 ca-certificates tar \
             cmake ninja-build make pkg-config \
             autoconf automake libtool gettext texinfo \
             crossbuild-essential-arm64 \
-            clang zip file
+            clang zip file \
+            binutils-aarch64-linux-gnu
 
           dpkg --add-architecture arm64
 
-          for f in /etc/apt/sources.list.d/*.sources; do
-            if [ -f "$f" ] && ! grep -q 'Architectures:' "$f"; then
-              sed -i '/^Types:/a Architectures: amd64' "$f"
+          # Ensure apt sources default to amd64 only (prevents accidental multi-arch confusion)
+          for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            [ -f "$f" ] || continue
+            if echo "$f" | grep -q '\.sources$'; then
+              if ! grep -q 'Architectures:' "$f"; then
+                sed -i '/^Types:/a Architectures: amd64' "$f"
+              fi
             fi
           done
 
+          # ARM64 ports: pin to FOCAL (older glibc) for better stock-OS compatibility
           printf '%s\n' \
-            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports plucky main restricted universe multiverse' \
-            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports plucky-updates main restricted universe multiverse' \
-            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports plucky-security main restricted universe multiverse' \
+            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main restricted universe multiverse' \
+            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main restricted universe multiverse' \
+            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main restricted universe multiverse' \
             > /etc/apt/sources.list.d/arm64-ports.list
 
           apt-get update
@@ -75,11 +87,13 @@ jobs:
           path: third_party
           key: Linux-arm64-cross-${{ hashFiles('build-deps.sh', 'CMakeLists.txt', 'cmake/**', '.github/workflows/**') }}
 
-      - name: Install ARM64 dev libs for SDL3 (from apt)
+      - name: Install ARM64 dev libs for SDL3 (from apt) - FOCAL ARM64
         shell: bash
         run: |
           set -euxo pipefail
           apt-get update
+
+          # Prefer Wayland/DRM/EGL/GLES deps for handhelds; keep X11 deps if your SDL3 build needs them.
           apt-get install -y \
             libasound2-dev:arm64 libpulse-dev:arm64 \
             libx11-dev:arm64 libxext-dev:arm64 libxrandr-dev:arm64 \
@@ -89,9 +103,11 @@ jobs:
             libdrm-dev:arm64 libgbm-dev:arm64 \
             libgl1-mesa-dev:arm64 libgles2-mesa-dev:arm64 libegl1-mesa-dev:arm64 \
             libdbus-1-dev:arm64 libudev-dev:arm64 \
-            libpipewire-0.3-dev:arm64 \
-            libwayland-dev:arm64 libwayland-egl1:arm64 libdecor-0-dev:arm64 \
+            libwayland-dev:arm64 libwayland-egl1:arm64 \
             wayland-protocols
+
+          # Focal may not ship pipewire/libdecor in default repos for arm64; ignore if unavailable.
+          apt-get install -y libpipewire-0.3-dev:arm64 libdecor-0-dev:arm64 || true
 
       - name: Set pkg-config for cross (arm64)
         shell: bash
@@ -292,7 +308,6 @@ jobs:
           LIBCDIO_PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
           LIBCDIO_PC="$LIBCDIO_PREFIX/lib/pkgconfig"
 
-          # Keep the old "working" libcdio path hints so -lcdio/-liso9660 resolves.
           PKG_CONFIG_PATH="$LIBCDIO_PC:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
           PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
           cmake -S . -B build-linux-arm64 -G Ninja \
@@ -301,7 +316,7 @@ jobs:
             -DCMAKE_PREFIX_PATH="$LIBCDIO_PREFIX" \
             -DCMAKE_LIBRARY_PATH="$LIBCDIO_PREFIX/lib" \
             -DCMAKE_INCLUDE_PATH="$LIBCDIO_PREFIX/include" \
-            -DCMAKE_EXE_LINKER_FLAGS="-L$LIBCDIO_PREFIX/lib"
+            -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath,'\$ORIGIN/../lib' -static-libstdc++ -static-libgcc -L$LIBCDIO_PREFIX/lib"
 
           cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
 
@@ -312,7 +327,16 @@ jobs:
           name: build-log-linux-arm64
           path: build.log
 
-      - name: Package ARM64 build RockNIX
+      - name: Check required GLIBC/GLIBCXX symbols (quick sanity)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "---- file ----"
+          file build-linux-arm64/3sx || true
+          echo "---- strings GLIBC (top 10) ----"
+          strings build-linux-arm64/3sx | grep -E 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -n 10 || true
+
+      - name: Package ARM64 build (portable)
         shell: bash
         run: |
           set -euxo pipefail
