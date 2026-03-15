@@ -2,11 +2,14 @@
 # Stock-OS compatibility goal: build against an older userspace (Ubuntu 20.04 focal)
 # so the resulting aarch64 binary does NOT require super-new GLIBC/GLIBCXX.
 #
-# Key fix vs your previous attempt:
-# - When you add arm64 as a foreign arch, apt will ALSO try to fetch arm64 indexes from
-#   the default archive/security repos unless you lock them to [arch=amd64].
-# - So we rewrite /etc/apt/sources.list as amd64-only, and add a separate arm64-only
-#   ports.ubuntu.com list.
+# IMPORTANT FIXES INCLUDED:
+# 1) Use ubuntu:20.04 container + arm64 sysroot from ports.ubuntu.com (focal)
+# 2) Prevent apt from trying to fetch arm64 from archive/security (404) by locking
+#    default repos to [arch=amd64] and putting arm64 repos ONLY in arm64-ports.list
+# 3) Disable SDL3 KMSDRM backend on focal (libdrm headers too old) since your target
+#    handheld stack is Wayland-only anyway.
+# 4) Statically link libstdc++/libgcc into the executable to avoid GLIBCXX/CXXABI
+#    mismatches on the device (glibc still comes from the OS).
 
 name: Build (Linux ARM64 Cross-Compile)
 
@@ -99,13 +102,9 @@ jobs:
           set -euxo pipefail
           apt-get update
 
-          # Keep what you had; these are arm64 sysroot dev packages from ports.ubuntu.com
+          # Handheld-friendly deps: Wayland/DRM/EGL/GLES + audio + udev/dbus
           apt-get install -y \
             libasound2-dev:arm64 libpulse-dev:arm64 \
-            libx11-dev:arm64 libxext-dev:arm64 libxrandr-dev:arm64 \
-            libxcursor-dev:arm64 libxfixes-dev:arm64 libxi-dev:arm64 \
-            libxrender-dev:arm64 libxinerama-dev:arm64 libxtst-dev:arm64 \
-            libxss-dev:arm64 libxkbcommon-dev:arm64 libxkbcommon-x11-dev:arm64 \
             libdrm-dev:arm64 libgbm-dev:arm64 \
             libgl1-mesa-dev:arm64 libgles2-mesa-dev:arm64 libegl1-mesa-dev:arm64 \
             libdbus-1-dev:arm64 libudev-dev:arm64 \
@@ -230,7 +229,7 @@ jobs:
           make -j"$(nproc)"
           make install
 
-      - name: Build SDL3 (aarch64)
+      - name: Build SDL3 (aarch64) - Wayland only (no KMSDRM/X11)
         shell: bash
         run: |
           set -euxo pipefail
@@ -259,7 +258,13 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
             -DCMAKE_INSTALL_PREFIX="$INSTALL" \
             -DBUILD_SHARED_LIBS=ON \
-            -DSDL_STATIC=OFF
+            -DSDL_STATIC=OFF \
+            -DSDL_WAYLAND=ON \
+            -DSDL_WAYLAND_SHARED=ON \
+            -DSDL_KMSDRM=OFF \
+            -DSDL_KMSDRM_SHARED=OFF \
+            -DSDL_X11=OFF \
+            -DSDL_X11_SHARED=OFF
 
           cmake --build . --parallel
           cmake --install .
@@ -340,7 +345,7 @@ jobs:
           echo "---- strings GLIBC (top 10) ----"
           strings build-linux-arm64/3sx | grep -E 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -n 10 || true
 
-      - name: Package ARM64 build RockNIX/portable
+      - name: Package ARM64 build (portable)
         shell: bash
         run: |
           set -euxo pipefail
