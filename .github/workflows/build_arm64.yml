@@ -1,13 +1,12 @@
-# NOTE: This workflow was confirmed working on RockNIX (RK3566) as of 2026-02-25.
-# Stock-OS compatibility goal: target glibc <= 2.32 (your stock OS is Buildroot glibc 2.32).
-#
-# Key points:
-# - Build inside ubuntu:20.04 (glibc 2.31 baseline) and use focal arm64 sysroot from ports.ubuntu.com.
-# - DO NOT cache third_party while you are transitioning baselines (it can reuse libs built against newer glibc).
-# - Disable SDL3 KMSDRM + X11 and build Wayland-only.
-# - Force pkg-config to use ARM64 .pc dirs so SDL detects Wayland properly.
-# - Add a HARD "GLIBC gate" that FAILS CI if dist/bin or dist/lib needs GLIBC > 2.32.
-# - Keep -static-libstdc++ -static-libgcc for the main executable to avoid GLIBCXX/CXXABI mismatch.
+# NOTE: This workflow targets old ARM64 Linux userspace compatibility for stock Anbernic ARC OS.
+# Intent:
+# - Build inside ubuntu:20.04 to keep a conservative host baseline.
+# - Pull ARM64 target libs from Ubuntu Focal ports.
+# - Avoid third_party caching until ABI baseline is fully validated.
+# - Build SDL3 as Wayland-only (no KMSDRM/X11).
+# - Package needed shared libs locally into dist/lib.
+# - Hard fail CI if packaged binaries require GLIBC > 2.32.
+# - Keep -static-libstdc++ -static-libgcc on the main executable.
 
 name: Build (Linux ARM64 Cross-Compile)
 
@@ -30,7 +29,7 @@ jobs:
           set -euxo pipefail
           export DEBIAN_FRONTEND=noninteractive
 
-          # Force DEFAULT repos to amd64 only (prevents apt trying arm64 on archive/security -> 404)
+          # Force DEFAULT repos to amd64 only
           cat > /etc/apt/sources.list <<'EOF'
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu focal main restricted universe multiverse
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu focal-updates main restricted universe multiverse
@@ -42,13 +41,14 @@ jobs:
 
           apt-get update
 
-          # Base build deps (amd64)
+          # Base build deps (amd64 host tools)
           apt-get install -y --no-install-recommends \
             ca-certificates curl git xz-utils bzip2 tar zip file \
-            cmake ninja-build make pkg-config \
+            ninja-build make pkg-config \
             autoconf automake libtool gettext texinfo \
             clang \
             crossbuild-essential-arm64 \
+            binutils \
             binutils-aarch64-linux-gnu
 
           # Host Wayland tools (amd64) for SDL3 protocol generation
@@ -67,6 +67,39 @@ jobs:
           EOF
 
           apt-get update
+
+      - name: Install newer CMake (host x86_64)
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          CMAKE_VER="3.30.5"
+          ARCH="linux-x86_64"
+
+          cd /tmp
+          curl -L --retry 5 --retry-delay 2 \
+            -o cmake.tar.gz \
+            "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VER}/cmake-${CMAKE_VER}-${ARCH}.tar.gz"
+
+          tar -xzf cmake.tar.gz
+          mv "cmake-${CMAKE_VER}-${ARCH}" /opt/cmake
+
+          ln -sf /opt/cmake/bin/cmake /usr/local/bin/cmake
+          ln -sf /opt/cmake/bin/ctest /usr/local/bin/ctest
+          ln -sf /opt/cmake/bin/cpack /usr/local/bin/cpack
+
+          which cmake
+          cmake --version
+
+      - name: Verify host tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --version
+          ninja --version
+          aarch64-linux-gnu-gcc --version
+          aarch64-linux-gnu-g++ --version
+          aarch64-linux-gnu-pkg-config --version || true
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -94,7 +127,7 @@ jobs:
           test -f GekkoNet/CMakeLists.txt
           echo "GekkoNet OK"
 
-      # IMPORTANT: cache disabled until the ABI baseline is proven (prevents reusing "new glibc" libs)
+      # IMPORTANT: cache disabled until ABI baseline is proven
       # - name: Cache third_party
       #   uses: actions/cache@v4
       #   with:
@@ -107,18 +140,28 @@ jobs:
           set -euxo pipefail
           apt-get update
 
-          apt-get install -y \
-            libasound2-dev:arm64 libpulse-dev:arm64 \
-            libdrm-dev:arm64 libgbm-dev:arm64 \
-            libgl1-mesa-dev:arm64 libgles2-mesa-dev:arm64 libegl1-mesa-dev:arm64 \
-            libdbus-1-dev:arm64 libudev-dev:arm64 \
-            libwayland-dev:arm64 libwayland-egl1:arm64 \
-            libwayland-client0:arm64 libwayland-cursor0:arm64 libwayland-server0:arm64 \
+          apt-get install -y --no-install-recommends \
+            libasound2-dev:arm64 \
+            libpulse-dev:arm64 \
+            libdrm-dev:arm64 \
+            libgbm-dev:arm64 \
+            libgl1-mesa-dev:arm64 \
+            libgles2-mesa-dev:arm64 \
+            libegl1-mesa-dev:arm64 \
+            libdbus-1-dev:arm64 \
+            libudev-dev:arm64 \
+            libwayland-dev:arm64 \
+            libwayland-egl1:arm64 \
+            libwayland-client0:arm64 \
+            libwayland-cursor0:arm64 \
+            libwayland-server0:arm64 \
             libxkbcommon-dev:arm64 \
             wayland-protocols
 
-          # Optional; may be unavailable on focal arm64 depending on repo state
-          apt-get install -y libpipewire-0.3-dev:arm64 libdecor-0-dev:arm64 || true
+          # Optional; may be unavailable on focal arm64
+          apt-get install -y --no-install-recommends \
+            libpipewire-0.3-dev:arm64 \
+            libdecor-0-dev:arm64 || true
 
       - name: Set pkg-config for cross (arm64)
         shell: bash
@@ -184,14 +227,17 @@ jobs:
             exit 0
           fi
 
-          mkdir -p ffmpeg && cd ffmpeg
+          mkdir -p ffmpeg
+          cd ffmpeg
+
           if [ ! -d "$FFMPEG" ]; then
             curl -L -O "https://ffmpeg.org/releases/$FFMPEG.tar.xz"
             tar xf "$FFMPEG.tar.xz"
           fi
 
           cd "$FFMPEG"
-          mkdir -p build && cd build
+          mkdir -p build
+          cd build
 
           ../configure \
             --prefix="$INSTALL" \
@@ -200,10 +246,17 @@ jobs:
             --enable-cross-compile \
             --cross-prefix=aarch64-linux-gnu- \
             --disable-x86asm \
-            --disable-static --enable-shared \
-            --disable-all --disable-autodetect \
-            --enable-avcodec --enable-avformat --enable-avutil --enable-swresample \
-            --enable-decoder=adpcm_adx --enable-parser=adx --enable-muxer=adx
+            --disable-static \
+            --enable-shared \
+            --disable-all \
+            --disable-autodetect \
+            --enable-avcodec \
+            --enable-avformat \
+            --enable-avutil \
+            --enable-swresample \
+            --enable-decoder=adpcm_adx \
+            --enable-parser=adx \
+            --enable-muxer=adx
 
           make -j"$(nproc)"
           make install
@@ -224,22 +277,23 @@ jobs:
           fi
 
           rm -rf "$INSTALL"
-          mkdir -p sdl3 && cd sdl3
+          mkdir -p sdl3
+          cd sdl3
+
           if [ ! -d "$SDL" ]; then
             curl -L -O "https://libsdl.org/release/$SDL.tar.gz"
             tar xf "$SDL.tar.gz"
           fi
 
           cd "$SDL"
-          mkdir -p build && cd build
+          mkdir -p build
+          cd build
 
-          # Force SDL3 to find TARGET (arm64) Wayland via pkg-config
           export PKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config
           export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
           export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
           export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
 
-          # Fail-fast sanity checks
           pkg-config --version
           pkg-config --exists wayland-client
           pkg-config --exists wayland-egl
@@ -314,6 +368,12 @@ jobs:
 
           cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
 
+      - name: Verify architecture
+        shell: bash
+        run: |
+          set -euxo pipefail
+          file build-linux-arm64/3sx | grep -q aarch64
+
       - name: Package ARM64 build (portable)
         shell: bash
         run: |
@@ -330,6 +390,7 @@ jobs:
           else
             SDL_LIBDIR="third_party/sdl3/build/lib"
           fi
+
           FF_LIBDIR="third_party/ffmpeg/build/lib"
 
           if [ -d third_party/sdl_net/build/lib64 ]; then
@@ -404,13 +465,15 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
           echo "---- dist/bin/3sx max GLIBC ----"
-          strings dist/bin/3sx | grep -E 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -n 10 || true
+          readelf --version-info dist/bin/3sx 2>/dev/null | grep -o 'GLIBC_[0-9]\+\.[0-9]\+' | sort -V | tail -n 10 || true
+
           echo "---- dist/lib max GLIBC (each) ----"
           for f in dist/lib/*.so*; do
             [ -e "$f" ] || continue
             echo "== $f =="
-            strings "$f" | grep -E 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -n 5 || true
+            readelf --version-info "$f" 2>/dev/null | grep -o 'GLIBC_[0-9]\+\.[0-9]\+' | sort -V | tail -n 5 || true
           done
 
       - name: Fail if package requires GLIBC > 2.32 (stock OS gate)
@@ -422,7 +485,11 @@ jobs:
 
           check_file() {
             f="$1"
-            req="$(strings "$f" | grep -o 'GLIBC_[0-9]\+\.[0-9]\+' | sort -V | tail -n 1 || true)"
+            req="$(
+              readelf --version-info "$f" 2>/dev/null \
+                | grep -o 'GLIBC_[0-9]\+\.[0-9]\+' \
+                | sort -V | tail -n 1 || true
+            )"
             echo "$f -> ${req:-none}"
             if [ -n "$req" ]; then
               top="$(printf '%s\n' "$max_ok" "$req" | sort -V | tail -n 1)"
@@ -451,9 +518,3 @@ jobs:
         with:
           name: 3sx-linux-arm64
           path: 3sx-linux-arm64.tar.gz
-
-      - name: Verify architecture
-        shell: bash
-        run: |
-          set -euxo pipefail
-          file build-linux-arm64/3sx | grep -q aarch64
