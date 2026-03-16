@@ -11,6 +11,8 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+option(ENABLE_WERROR "Treat warnings as errors" ON)
+
 # Fail fast if submodule didn't fetch
 if(NOT EXISTS "${CMAKE_SOURCE_DIR}/GekkoNet/CMakeLists.txt")
   message(FATAL_ERROR "Missing GekkoNet directory. Did you forget to fetch submodules?")
@@ -87,13 +89,15 @@ endif()
 
 target_compile_options(3sx PRIVATE
     -Wall
-    -Werror
     -fno-strict-aliasing
     ${DISABLED_WARNINGS}
 
     # Debug-only relaxations
     $<$<CONFIG:Debug>:-Wno-unused-function>
     $<$<CONFIG:Debug>:-Wno-unused-variable>
+
+    # Optional strictness
+    $<$<BOOL:${ENABLE_WERROR}>:-Werror>
 )
 
 target_link_libraries(3sx PRIVATE
