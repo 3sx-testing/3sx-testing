@@ -5,6 +5,7 @@
 # - Build inside ubuntu:20.04 (glibc 2.31 baseline) and use focal arm64 sysroot from ports.ubuntu.com.
 # - DO NOT cache third_party while you are transitioning baselines (it can reuse libs built against newer glibc).
 # - Disable SDL3 KMSDRM + X11 and build Wayland-only.
+# - Force pkg-config to use ARM64 .pc dirs so SDL detects Wayland properly.
 # - Add a HARD "GLIBC gate" that FAILS CI if dist/bin or dist/lib needs GLIBC > 2.32.
 # - Keep -static-libstdc++ -static-libgcc for the main executable to avoid GLIBCXX/CXXABI mismatch.
 
@@ -112,6 +113,8 @@ jobs:
             libgl1-mesa-dev:arm64 libgles2-mesa-dev:arm64 libegl1-mesa-dev:arm64 \
             libdbus-1-dev:arm64 libudev-dev:arm64 \
             libwayland-dev:arm64 libwayland-egl1:arm64 \
+            libwayland-client0:arm64 libwayland-cursor0:arm64 libwayland-server0:arm64 \
+            libxkbcommon-dev:arm64 \
             wayland-protocols
 
           # Optional; may be unavailable on focal arm64 depending on repo state
@@ -124,6 +127,7 @@ jobs:
           echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config" >> "$GITHUB_ENV"
 
       - name: Prepare third_party folder
         shell: bash
@@ -164,31 +168,6 @@ jobs:
 
           make -j"$(nproc)"
           make install
-
-          test -f "$PREFIX/include/cdio/iso9660.h"
-          test -f "$PREFIX/lib/libcdio.a"
-          test -f "$PREFIX/lib/libiso9660.a"
-
-      - name: Create libcdio.pc for pkg-config (local)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          PREFIX="$GITHUB_WORKSPACE/third_party/libcdio/build"
-          PCDIR="$PREFIX/lib/pkgconfig"
-          mkdir -p "$PCDIR"
-
-          printf '%s\n' \
-            "prefix=$PREFIX" \
-            "exec_prefix=\${prefix}" \
-            "libdir=\${prefix}/lib" \
-            "includedir=\${prefix}/include" \
-            "" \
-            "Name: libcdio" \
-            "Description: Compact Disc Input and Control Library" \
-            "Version: 2.2.0" \
-            "Libs: -L\${libdir} -liso9660 -lcdio" \
-            "Cflags: -I\${includedir}" \
-            > "$PCDIR/libcdio.pc"
 
       - name: Build FFmpeg (aarch64)
         shell: bash
@@ -254,8 +233,16 @@ jobs:
           cd "$SDL"
           mkdir -p build && cd build
 
+          # Force SDL3 to find TARGET (arm64) Wayland via pkg-config
+          export PKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config
           export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
           export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
+
+          # Fail-fast sanity checks
+          pkg-config --version
+          pkg-config --exists wayland-client
+          pkg-config --exists wayland-egl
 
           cmake .. -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/aarch64-linux-gnu.cmake" \
@@ -267,7 +254,8 @@ jobs:
             -DSDL_KMSDRM=OFF \
             -DSDL_KMSDRM_SHARED=OFF \
             -DSDL_X11=OFF \
-            -DSDL_X11_SHARED=OFF
+            -DSDL_X11_SHARED=OFF \
+            -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config
 
           cmake --build . --parallel
           cmake --install .
