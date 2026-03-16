@@ -1,15 +1,12 @@
 # NOTE: This workflow was confirmed working on RockNIX (RK3566) as of 2026-02-25.
-# Stock-OS compatibility goal: build against an older userspace (Ubuntu 20.04 focal)
-# so the resulting aarch64 binary does NOT require super-new GLIBC/GLIBCXX.
+# Stock-OS compatibility goal: target glibc <= 2.32 (your stock OS is Buildroot glibc 2.32).
 #
-# IMPORTANT FIXES INCLUDED:
-# 1) Use ubuntu:20.04 container + arm64 sysroot from ports.ubuntu.com (focal)
-# 2) Prevent apt from trying to fetch arm64 from archive/security (404) by locking
-#    default repos to [arch=amd64] and putting arm64 repos ONLY in arm64-ports.list
-# 3) Install host (amd64) Wayland tools so SDL3 can generate protocol code (wayland-scanner)
-# 4) Force SDL3 to find *target* (arm64) Wayland dev libs via pkg-config env vars
-# 5) Disable SDL3 KMSDRM backend on focal (libdrm headers too old) and disable X11
-# 6) Statically link libstdc++/libgcc into the executable to avoid GLIBCXX/CXXABI mismatches
+# Key points:
+# - Build inside ubuntu:20.04 (glibc 2.31 baseline) and use focal arm64 sysroot from ports.ubuntu.com.
+# - DO NOT cache third_party while you are transitioning baselines (it can reuse libs built against newer glibc).
+# - Disable SDL3 KMSDRM + X11 and build Wayland-only.
+# - Add a HARD "GLIBC gate" that FAILS CI if dist/bin or dist/lib needs GLIBC > 2.32.
+# - Keep -static-libstdc++ -static-libgcc for the main executable to avoid GLIBCXX/CXXABI mismatch.
 
 name: Build (Linux ARM64 Cross-Compile)
 
@@ -32,7 +29,7 @@ jobs:
           set -euxo pipefail
           export DEBIAN_FRONTEND=noninteractive
 
-          # --- 1) Force DEFAULT repos to amd64 only (prevents arm64 404s on archive/security) ---
+          # Force DEFAULT repos to amd64 only (prevents apt trying arm64 on archive/security -> 404)
           cat > /etc/apt/sources.list <<'EOF'
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu focal main restricted universe multiverse
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu focal-updates main restricted universe multiverse
@@ -40,7 +37,6 @@ jobs:
           deb [arch=amd64] http://security.ubuntu.com/ubuntu focal-security main restricted universe multiverse
           EOF
 
-          # Remove any other default lists that might re-introduce multi-arch repos
           rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources || true
 
           apt-get update
@@ -54,13 +50,13 @@ jobs:
             crossbuild-essential-arm64 \
             binutils-aarch64-linux-gnu
 
-          # --- 3) Host Wayland tools (amd64) for SDL protocol generation ---
+          # Host Wayland tools (amd64) for SDL3 protocol generation
           apt-get install -y --no-install-recommends \
             wayland-protocols \
             libwayland-bin \
             libwayland-dev
 
-          # --- 2) Enable arm64, but ONLY via ports.ubuntu.com ---
+          # Enable arm64, but ONLY via ports.ubuntu.com
           dpkg --add-architecture arm64
 
           cat > /etc/apt/sources.list.d/arm64-ports.list <<'EOF'
@@ -97,11 +93,12 @@ jobs:
           test -f GekkoNet/CMakeLists.txt
           echo "GekkoNet OK"
 
-      - name: Cache third_party
-        uses: actions/cache@v4
-        with:
-          path: third_party
-          key: Linux-arm64-cross-${{ hashFiles('build-deps.sh', 'CMakeLists.txt', 'cmake/**', '.github/workflows/**') }}
+      # IMPORTANT: cache disabled until the ABI baseline is proven (prevents reusing "new glibc" libs)
+      # - name: Cache third_party
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: third_party
+      #     key: Linux-arm64-cross-${{ hashFiles('build-deps.sh', 'CMakeLists.txt', 'cmake/**', '.github/workflows/**') }}
 
       - name: Install ARM64 dev libs for SDL3 (from apt) - FOCAL ARM64
         shell: bash
@@ -109,7 +106,6 @@ jobs:
           set -euxo pipefail
           apt-get update
 
-          # Handheld-friendly deps: Wayland/DRM/EGL/GLES + audio + udev/dbus (arm64)
           apt-get install -y \
             libasound2-dev:arm64 libpulse-dev:arm64 \
             libdrm-dev:arm64 libgbm-dev:arm64 \
@@ -194,9 +190,6 @@ jobs:
             "Cflags: -I\${includedir}" \
             > "$PCDIR/libcdio.pc"
 
-          ls -la "$PCDIR"
-          cat "$PCDIR/libcdio.pc"
-
       - name: Build FFmpeg (aarch64)
         shell: bash
         run: |
@@ -261,7 +254,6 @@ jobs:
           cd "$SDL"
           mkdir -p build && cd build
 
-          # Force SDL3 to find TARGET (arm64) Wayland via pkg-config
           export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
           export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
 
@@ -279,8 +271,6 @@ jobs:
 
           cmake --build . --parallel
           cmake --install .
-
-          test -f "$INSTALL/lib/cmake/SDL3/SDL3Config.cmake" || test -f "$INSTALL/lib64/cmake/SDL3/SDL3Config.cmake"
 
       - name: Build SDL_net (SDL3_net) from git (aarch64)
         shell: bash
@@ -300,7 +290,6 @@ jobs:
 
           SDL3_DIR="$(find "$TP/sdl3/build" -name SDL3Config.cmake -printf '%h\n' | head -n 1)"
           test -n "$SDL3_DIR"
-          echo "Using SDL3_DIR=$SDL3_DIR"
 
           rm -rf "$INSTALL" "$SRC"
           git clone --depth 1 https://github.com/libsdl-org/SDL_net.git "$SRC"
@@ -316,9 +305,6 @@ jobs:
 
           cmake --build . --parallel
           cmake --install .
-
-          test -f "$INSTALL/include/SDL3_net/SDL_net.h"
-          test -f "$INSTALL/lib/libSDL3_net.so" || test -f "$INSTALL/lib64/libSDL3_net.so"
 
       - name: Build 3sx (Linux ARM64)
         shell: bash
@@ -339,22 +325,6 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath,'\$ORIGIN/../lib' -static-libstdc++ -static-libgcc -L$LIBCDIO_PREFIX/lib"
 
           cmake --build build-linux-arm64 --parallel 2>&1 | tee build.log
-
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log-linux-arm64
-          path: build.log
-
-      - name: Check required GLIBC symbols (sanity)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          echo "---- file ----"
-          file build-linux-arm64/3sx || true
-          echo "---- strings GLIBC (top 10) ----"
-          strings build-linux-arm64/3sx | grep -E 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -n 10 || true
 
       - name: Package ARM64 build (portable)
         shell: bash
@@ -441,6 +411,52 @@ jobs:
           chmod +x dist/3sx.sh
 
           tar -C dist -czf 3sx-linux-arm64.tar.gz .
+
+      - name: Check required GLIBC symbols (dist)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "---- dist/bin/3sx max GLIBC ----"
+          strings dist/bin/3sx | grep -E 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -n 10 || true
+          echo "---- dist/lib max GLIBC (each) ----"
+          for f in dist/lib/*.so*; do
+            [ -e "$f" ] || continue
+            echo "== $f =="
+            strings "$f" | grep -E 'GLIBC_[0-9]+\.[0-9]+' | sort -V | tail -n 5 || true
+          done
+
+      - name: Fail if package requires GLIBC > 2.32 (stock OS gate)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "Checking dist/ for GLIBC requirements (must be <= 2.32)..."
+          max_ok="GLIBC_2.32"
+
+          check_file() {
+            f="$1"
+            req="$(strings "$f" | grep -o 'GLIBC_[0-9]\+\.[0-9]\+' | sort -V | tail -n 1 || true)"
+            echo "$f -> ${req:-none}"
+            if [ -n "$req" ]; then
+              top="$(printf '%s\n' "$max_ok" "$req" | sort -V | tail -n 1)"
+              if [ "$top" != "$max_ok" ]; then
+                echo "ERROR: $f requires $req > $max_ok"
+                exit 1
+              fi
+            fi
+          }
+
+          check_file dist/bin/3sx
+          for f in dist/lib/*.so*; do
+            [ -e "$f" ] || continue
+            check_file "$f"
+          done
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-linux-arm64
+          path: build.log
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
